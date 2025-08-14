@@ -883,25 +883,61 @@ fn generate_available_places_csvs(
             // Sort matching records by rank to maintain order
             matching_records.sort_by_key(|r| r.rank);
             
-            // Create a map of admitted SNILS for quick lookup
+            // Create a set of admitted SNILS for quick lookup
             let admitted_snils_set: std::collections::HashSet<String> = admitted_snils_list
                 .iter()
                 .map(|snils| normalize_snils(snils))
                 .collect();
 
             let available_places = matching_records[0].available_places as usize;
-            let mut admission_position = 0;
-            let mut target_written = false;
 
-            // Write all admitted students with position tracking
+            // Calculate cutoff score from admitted students
+            let cutoff_score = if !admitted_snils_list.is_empty() {
+                let mut lowest_score = f64::MAX;
+                for admitted_snils in admitted_snils_list {
+                    for record in &matching_records {
+                        if normalize_snils(&record.snils) == normalize_snils(admitted_snils) {
+                            if let Some(score) = record.get_numeric_score() {
+                                lowest_score = lowest_score.min(score);
+                            }
+                        }
+                    }
+                }
+                if lowest_score == f64::MAX { 0.0 } else { lowest_score }
+            } else {
+                0.0
+            };
+
+            // Create a combined list with both admitted students and target applicant in proper rank order
+            let mut all_relevant_records = Vec::new();
+            
             for record in &matching_records {
                 let normalized_record_snils = normalize_snils(&record.snils);
-                if admitted_snils_set.contains(&normalized_record_snils) {
+                let is_admitted = admitted_snils_set.contains(&normalized_record_snils);
+                let is_target = normalized_record_snils == normalized_target;
+                
+                // Include if: admitted OR target applicant
+                if is_admitted || is_target {
+                    all_relevant_records.push((record.clone(), is_admitted, is_target));
+                }
+            }
+
+            // Sort by rank to ensure proper order
+            all_relevant_records.sort_by_key(|(record, _, _)| record.rank);
+
+            // Write all records in proper rank order
+            let mut admission_position = 0;
+            for (record, is_admitted, is_target) in all_relevant_records {
+                if is_admitted {
                     admission_position += 1;
+                }
+
+                let admission_status = if is_target {
+                    // For target applicant, determine status based on score vs cutoff
+                    let target_score = record.get_numeric_score().unwrap_or(0.0);
                     
-                    // Determine admission status - only add +/- for target applicant
-                    let admission_status = if normalized_record_snils == normalized_target {
-                        // For target applicant, include +/- based on admission position vs available places
+                    if is_admitted {
+                        // Target was actually admitted
                         if admission_position <= available_places {
                             match record.funding_source.as_str() {
                                 "Бюджетное финансирование" => "Admitted_Budget+",
@@ -916,66 +952,36 @@ fn generate_available_places_csvs(
                             }
                         }
                     } else {
-                        // For other students, just basic admission status without +/-
-                        match record.funding_source.as_str() {
-                            "Бюджетное финансирование" => "Admitted_Budget",
-                            "Коммерческое финансирование" => "Admitted_Commercial",
-                            _ => "Admitted_Other",
+                        // Target was not admitted - check if their score is above cutoff
+                        if target_score > cutoff_score && cutoff_score > 0.0 {
+                            "Target_NotAdmitted+"  // Score above cutoff but not admitted due to priority
+                        } else {
+                            "Target_NotAdmitted-"  // Score below cutoff or no cutoff available
                         }
-                    };
-
-                    writer.write_record(&[
-                        &record.rank.to_string(),
-                        &record.snils,
-                        &record.priority.to_string(),
-                        &record.consent,
-                        &record.document_type,
-                        &record.average_score,
-                        &record.subject_scores,
-                        &record.psychological_test,
-                        &record.funding_source,
-                        &record.study_form,
-                        &record.available_places.to_string(),
-                        admission_status,
-                    ])?;
-                    
-                    // Mark if we wrote the target applicant
-                    if normalized_record_snils == normalized_target {
-                        target_written = true;
                     }
-                }
-            }
+                } else {
+                    // Regular admitted student
+                    match record.funding_source.as_str() {
+                        "Бюджетное финансирование" => "Admitted_Budget",
+                        "Коммерческое финансирование" => "Admitted_Commercial",
+                        _ => "Admitted_Other",
+                    }
+                };
 
-            // Always include target applicant if they applied to this program, regardless of admission status
-            if let Some(target_rec) = target_record {
-                if !target_written {
-                    // Target applied but wasn't admitted - find their rank position in the full ranking
-                    let target_rank_position = matching_records.iter()
-                        .position(|r| normalize_snils(&r.snils) == normalized_target)
-                        .map(|pos| pos + 1)
-                        .unwrap_or(0);
-                    
-                    let admission_status = if target_rank_position <= available_places {
-                        "Target_NotAdmitted+"  // Would be within places by rank but wasn't admitted due to priority logic
-                    } else {
-                        "Target_NotAdmitted-"  // Outside available places by rank
-                    };
-
-                    writer.write_record(&[
-                        &target_rec.rank.to_string(),
-                        &target_rec.snils,
-                        &target_rec.priority.to_string(),
-                        &target_rec.consent,
-                        &target_rec.document_type,
-                        &target_rec.average_score,
-                        &target_rec.subject_scores,
-                        &target_rec.psychological_test,
-                        &target_rec.funding_source,
-                        &target_rec.study_form,
-                        &target_rec.available_places.to_string(),
-                        admission_status,
-                    ])?;
-                }
+                writer.write_record(&[
+                    &record.rank.to_string(),
+                    &record.snils,
+                    &record.priority.to_string(),
+                    &record.consent,
+                    &record.document_type,
+                    &record.average_score,
+                    &record.subject_scores,
+                    &record.psychological_test,
+                    &record.funding_source,
+                    &record.study_form,
+                    &record.available_places.to_string(),
+                    admission_status,
+                ])?;
             }
         }
 
@@ -1030,7 +1036,6 @@ fn generate_final_cutoff_analysis(
         };
 
         // Find matching records in all_program_records
-        let mut target_record: Option<models::StudentRecord> = None;
         let mut all_matching_records = Vec::new();
         
         for (record_program_name, program_records) in all_program_records {
@@ -1038,11 +1043,6 @@ fn generate_final_cutoff_analysis(
                 for record in program_records {
                     if record.funding_source == funding_source {
                         all_matching_records.push(record.clone());
-                        
-                        // Check if this is the target applicant
-                        if normalize_snils(&record.snils) == normalized_target {
-                            target_record = Some(record.clone());
-                        }
                     }
                 }
             }
@@ -1078,10 +1078,15 @@ fn generate_final_cutoff_analysis(
             0.0
         };
 
+        // Find the target record in the matching records
+        let target_record = all_matching_records
+            .iter()
+            .find(|record| normalize_snils(&record.snils) == normalized_target);
+
         if let Some(target_rec) = target_record {
             let target_score = target_rec.get_numeric_score().unwrap_or(0.0);
             
-            // Calculate position and status
+            // Calculate position and status - FIXED LOGIC
             let (admission_status, status_detail, position_info) = if is_admitted {
                 let position = admitted_snils_list
                     .iter()
@@ -1092,26 +1097,39 @@ fn generate_final_cutoff_analysis(
                 let position_str = format!("Position in admitted list: {} (of {} admitted)\n", position, admitted_snils_list.len());
                 ("Admitted".to_string(), String::new(), position_str)
             } else {
-                // Find target's rank position in the full list
-                let target_rank_position = all_matching_records
-                    .iter()
-                    .position(|r| normalize_snils(&r.snils) == normalized_target)
-                    .map(|pos| pos + 1)
-                    .unwrap_or(0);
-                
-                let applicants_behind = if target_rank_position > available_places {
-                    target_rank_position - available_places
+                // FIXED: Check if target score is higher than cutoff - should be "Admitted" status
+                if target_score > cutoff_score && cutoff_score > 0.0 {
+                    // Target has good enough score but wasn't admitted due to priority logic
+                    let target_rank_position = all_matching_records
+                        .iter()
+                        .position(|r| normalize_snils(&r.snils) == normalized_target)
+                        .map(|pos| pos + 1)
+                        .unwrap_or(0);
+                    
+                    let detail = format!(" (would qualify by score but priority {} not selected)", target_rec.priority);
+                    ("Admitted_ByScore_NotByPriority".to_string(), detail, String::new())
                 } else {
-                    0
-                };
-                
-                let detail = if applicants_behind > 0 {
-                    format!(" ({} applicants behind)", applicants_behind)
-                } else {
-                    String::new()
-                };
-                
-                ("Not_Admitted".to_string(), detail, String::new())
+                    // Target doesn't have good enough score
+                    let target_rank_position = all_matching_records
+                        .iter()
+                        .position(|r| normalize_snils(&r.snils) == normalized_target)
+                        .map(|pos| pos + 1)
+                        .unwrap_or(0);
+                    
+                    let applicants_behind = if target_rank_position > available_places {
+                        target_rank_position - available_places
+                    } else {
+                        0
+                    };
+                    
+                    let detail = if applicants_behind > 0 {
+                        format!(" ({} applicants behind)", applicants_behind)
+                    } else {
+                        String::new()
+                    };
+                    
+                    ("Not_Admitted".to_string(), detail, String::new())
+                }
             };
 
             content.push_str(&format!(
