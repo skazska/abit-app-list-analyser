@@ -1,0 +1,12 @@
+target_snils = "15124960041"
+# Comment out programs_of_interest to analyze ALL programs
+# programs_of_interest = [
+#     "ОП СПО Лечебное дело",
+#     "ОП СПО Фармация",
+# ]
+target_funding_types = [
+    "Бюджетное финансирование",
+    "Коммерческое финансирование",
+]
+data_directory = "data-source"
+output_directory = "output"

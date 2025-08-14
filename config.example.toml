@@ -1,0 +1,55 @@
+# Abitur Analyzer Configuration File
+# ===================================
+# 
+# This file contains all configuration options for the admission analyzer.
+# Copy this file to 'config.toml' and modify the values as needed.
+
+# Target applicant SNILS to analyze
+# REQUIRED: Set this to the SNILS you want to analyze
+target_snils = "15124960041"
+
+# Programs of interest to focus analysis on
+# These are the programs you're most interested in
+programs_of_interest = [
+    "ОП СПО Лечебное дело",
+    "ОП СПО Фармация",
+    "ОП СПО Сестринское дело",
+    "ОП СПО Акушерское дело",
+]
+
+# Funding types to consider in the analysis
+# Options: "Бюджетное финансирование", "Коммерческое финансирование"
+target_funding_types = [
+    "Бюджетное финансирование",
+    "Коммерческое финансирование",
+]
+
+# Directory containing HTML files with admission data
+# Default: "data-source"
+data_directory = "data-source"
+
+# Directory where output files will be saved
+# Default: "output"
+output_directory = "output"
+
+# Example configurations for different scenarios:
+#
+# 1. Budget funding only:
+# target_funding_types = ["Бюджетное финансирование"]
+#
+# 2. Commercial funding only:
+# target_funding_types = ["Коммерческое финансирование"]
+#
+# 3. Single program focus:
+# programs_of_interest = ["ОП СПО Лечебное дело"]
+#
+# 4. All medical programs:
+# programs_of_interest = [
+#     "ОП СПО Лечебное дело",
+#     "ОП СПО Фармация", 
+#     "ОП СПО Сестринское дело",
+#     "ОП СПО Акушерское дело",
+#     "ОП СПО Лабораторная диагностика",
+#     "ОП СПО Стоматология профилактическая",
+#     "ОП СПО Стоматология ортопедическая",
+# ]
