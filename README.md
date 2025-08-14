@@ -1,6 +1,8 @@
 # Abitur Analyzer - Comprehensive Guide
 
-> **Disclaimer**: This program was created with the assistance of GitHub Copilot AI.
+> **Disclaimer**: This program was created with GitHub Copilot AI Assistant.
+> Near zero code review, near zero lines of code were changed manually.
+> Use at your own risk, no guarantees of correctness or reliability.
 
 ## Table of Contents
 
