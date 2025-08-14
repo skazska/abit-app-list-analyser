@@ -1,2 +1,23 @@
-/target
-/output
+# Abitur Analyzer
+
+/target/
+/builds/
+*.log
+.env
+config.toml
+/data-source/
+/output/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Backup files
+*~
+*.bak

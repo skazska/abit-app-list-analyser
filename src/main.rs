@@ -225,7 +225,7 @@ async fn main() -> Result<()> {
     println!("✅ Priority-based analysis complete!");
 
     // Print summary
-    print_unified_summary(&analysis, &chance_analysis);
+    print_unified_summary(&analysis, &chance_analysis, output_dir);
 
     println!("\n✅ Analysis complete!");
     println!("📂 Results: {}", output_dir);
@@ -358,6 +358,7 @@ fn print_summary(
 fn print_unified_summary(
     analysis: &analyzer::AdmissionAnalysis,
     chance_analysis: &ChanceAnalysis,
+    output_dir: &str,
 ) {
     println!("\n📊 UNIFIED PRIORITY-BASED ADMISSION ANALYSIS");
     println!("==========================================\n");
@@ -380,10 +381,50 @@ fn print_unified_summary(
     if analysis.target_applicant_found {
         println!("✅ Target applicant found in the data");
         println!("📋 Application Results:");
-        for (program_key, admitted) in &analysis.target_applicant_results {
-            let status = if *admitted { "✅ ADMITTED" } else { "❌ Not admitted" };
-            println!("   • {}: {}", program_key, status);
+        
+        // Read cutoff analysis to get detailed status information
+        let cutoff_path = format!("{}/final_cutoff_analysis.txt", output_dir);
+        if let Ok(cutoff_content) = fs::read_to_string(&cutoff_path) {
+            let lines: Vec<&str> = cutoff_content.lines().collect();
+            let mut current_program = String::new();
+            let mut current_status = String::new();
+            
+            for line in lines.iter().skip(3) { // Skip header lines
+                if line.starts_with("Program: ") {
+                    current_program = line.strip_prefix("Program: ").unwrap_or(line).to_string();
+                } else if line.starts_with("Status: ") {
+                    current_status = line.strip_prefix("Status: ").unwrap_or(line).to_string();
+                    
+                    // Format status with appropriate icons
+                    let formatted_status = if current_status.contains("Admitted") && !current_status.contains("Not_") {
+                        if current_status.contains("Admitted_ByScore_NotByPriority") {
+                            format!("🟡 {}", current_status)
+                        } else {
+                            format!("✅ {}", current_status)
+                        }
+                    } else if current_status.contains("Not_Admitted") {
+                        format!("❌ {}", current_status)
+                    } else if current_status.contains("Hypothetical") {
+                        if current_status.contains("Would likely be admitted") {
+                            format!("🔮 {}", current_status)
+                        } else {
+                            format!("🚫 {}", current_status)
+                        }
+                    } else {
+                        format!("ℹ️  {}", current_status)
+                    };
+                    
+                    println!("   • {}: {}", current_program, formatted_status);
+                }
+            }
+        } else {
+            // Fallback to simple format if cutoff analysis file not found
+            for (program_key, admitted) in &analysis.target_applicant_results {
+                let status = if *admitted { "✅ Admitted" } else { "❌ Not_Admitted" };
+                println!("   • {}: {}", program_key, status);
+            }
         }
+        
         println!("\n📝 Final Recommendation:");
         println!("   {}", chance_analysis.final_recommendation);
     } else {

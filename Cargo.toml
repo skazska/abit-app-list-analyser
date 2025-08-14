@@ -2,6 +2,14 @@
 name = "abitur-analyzer"
 version = "0.1.0"
 edition = "2021"
+description = "A Rust application for analyzing admission chances to medical programs"
+authors = ["GitHub Copilot Assistant"]
+license = "MIT"
+repository = "https://github.com/skazska/abit-app-list-analyser"
+
+[[bin]]
+name = "abitur-analyzer"
+path = "src/main.rs"
 
 [dependencies]
 scraper = "0.18"
@@ -13,3 +21,12 @@ anyhow = "1.0"
 regex = "1.10"
 toml = "0.8"
 reqwest = { version = "0.11", features = ["json"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[target.'cfg(windows)']
+[target.'cfg(unix)']
