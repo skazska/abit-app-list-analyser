@@ -77,6 +77,26 @@ pub struct StudentRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApplicantApplication {
+    pub snils: String,
+    pub program_key: String, // program_name + funding_source for uniqueness
+    pub program_name: String,
+    pub funding_source: String,
+    pub priority: u32,
+    pub rank: u32,
+    pub average_score: f64,
+    pub has_consent: bool,
+    pub has_original_document: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EagerApplicant {
+    pub snils: String,
+    pub applications: Vec<ApplicantApplication>, // sorted by priority
+    pub average_rank: f64, // average rank across all applications
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProgramInfo {
     pub name: String,
     pub funding_source: String,

@@ -204,90 +204,32 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    // Perform budget funding analysis first
-    println!("\n🎯 Analyzing budget funding admission chances...");
-    let budget_analyzer = AdmissionAnalyzer::new_with_funding_filter(
+    // Perform unified priority-based analysis for all funding types
+    println!("\n🎯 Analyzing admission chances using priority-based algorithm...");
+    let analyzer = AdmissionAnalyzer::new(
         config.target_snils.clone(), 
-        config.clone(), 
-        vec!["Бюджетное финансирование".to_string()]
+        config.clone()
     );
     
-    // Filter records for budget funding only
-    let budget_program_records = filter_records_by_funding(
-        &all_program_records, 
-        &vec!["Бюджетное финансирование".to_string()]
-    );
-    
-    let budget_analysis = budget_analyzer.analyze_all_programs(budget_program_records.clone());
-    let budget_chance_analysis = budget_analyzer.analyze_target_chances(&budget_analysis);
+    let analysis = analyzer.analyze_all_programs(all_program_records.clone());
+    let chance_analysis = analyzer.analyze_target_chances(&analysis);
 
-    // Create budget output directory
-    let budget_output_dir = format!("{}/budget", output_dir);
-    fs::create_dir_all(&budget_output_dir)?;
-    clean_output_directory(&budget_output_dir)?;
+    // Generate reports with new unified data
+    generate_program_popularity_report(&analysis, output_dir)?;
+    generate_detailed_csv(&all_program_records, output_dir)?;
+    generate_individual_program_csvs(&all_program_records, output_dir)?;
+    generate_filtered_eager_csvs(&analysis, &all_program_records, output_dir)?;
+    generate_available_places_csvs(&analysis, &all_program_records, output_dir)?;
+    generate_final_cutoff_analysis(&analysis, &chance_analysis, &all_program_records, output_dir)?;
 
-    // Generate budget reports with filtered data
-    generate_program_popularity_report(&budget_analysis, &budget_output_dir)?;
-    generate_detailed_csv(&budget_program_records, &budget_output_dir)?;
-    generate_all_programs_popularity(&budget_program_records, &budget_output_dir)?;
-    generate_individual_program_csvs(&budget_program_records, &budget_output_dir)?;
-    generate_filtered_eager_csvs(&budget_analysis, &budget_program_records, &budget_output_dir)?;
-    generate_available_places_csvs(&budget_analysis, &budget_program_records, &budget_output_dir)?;
-    generate_final_cutoff_analysis(&budget_analysis, &budget_chance_analysis, &budget_program_records, &budget_output_dir)?;
+    println!("✅ Priority-based analysis complete!");
 
-    println!("✅ Budget funding analysis complete!");
-
-    // Perform commercial funding analysis if configured
-    let mut commercial_analysis = None;
-    let mut commercial_chance_analysis = None;
-    
-    if config.target_funding_types.contains(&"Коммерческое финансирование".to_string()) {
-        println!("\n💰 Analyzing commercial funding admission chances...");
-        let commercial_analyzer = AdmissionAnalyzer::new_with_funding_filter_and_budget_exclusions(
-            config.target_snils.clone(), 
-            config.clone(), 
-            vec!["Коммерческое финансирование".to_string()],
-            budget_analysis.clone()
-        );
-        
-        // Filter records for commercial funding only
-        let commercial_program_records = filter_records_by_funding(
-            &all_program_records, 
-            &vec!["Коммерческое финансирование".to_string()]
-        );
-        
-        let commercial_analysis_result = commercial_analyzer.analyze_all_programs(commercial_program_records.clone());
-        let commercial_chance_analysis_result = commercial_analyzer.analyze_target_chances(&commercial_analysis_result);
-
-        // Create commercial output directory
-        let commercial_output_dir = format!("{}/commercial", output_dir);
-        fs::create_dir_all(&commercial_output_dir)?;
-        clean_output_directory(&commercial_output_dir)?;
-
-        // Generate commercial reports with filtered data
-        generate_program_popularity_report(&commercial_analysis_result, &commercial_output_dir)?;
-        generate_detailed_csv(&commercial_program_records, &commercial_output_dir)?;
-        generate_all_programs_popularity(&commercial_program_records, &commercial_output_dir)?;
-        generate_individual_program_csvs(&commercial_program_records, &commercial_output_dir)?;
-        generate_filtered_eager_csvs(&commercial_analysis_result, &commercial_program_records, &commercial_output_dir)?;
-        generate_available_places_csvs(&commercial_analysis_result, &commercial_program_records, &commercial_output_dir)?;
-        generate_final_cutoff_analysis(&commercial_analysis_result, &commercial_chance_analysis_result, &commercial_program_records, &commercial_output_dir)?;
-
-        commercial_analysis = Some(commercial_analysis_result);
-        commercial_chance_analysis = Some(commercial_chance_analysis_result);
-        
-        println!("✅ Commercial funding analysis complete!");
-    }
-
-    // Print summary for both funding types
-    print_summary(&budget_analysis, &budget_chance_analysis, commercial_analysis.as_ref(), commercial_chance_analysis.as_ref());
+    // Print summary
+    print_unified_summary(&analysis, &chance_analysis);
 
     println!("\n✅ Analysis complete!");
-    println!("📂 Budget funding results: {}/budget", output_dir);
-    if commercial_analysis.is_some() {
-        println!("📂 Commercial funding results: {}/commercial", output_dir);
-    }
-    println!("Check the output directories for detailed reports.");
+    println!("📂 Results: {}", output_dir);
+    println!("Check the output directory for detailed reports.");
     Ok(())
 }
 
@@ -321,26 +263,22 @@ fn generate_program_popularity_report(
     content.push_str("==========================\n\n");
 
     for popularity in &analysis.program_popularities {
-        let eager_per_place = popularity.eager_applicants.len() as f64 / popularity.available_places as f64;
-        let total_per_place = popularity.total_applications as f64 / popularity.available_places as f64;
+        let eager_per_place = popularity.total_eager_applicants as f64 / popularity.available_places as f64;
         
         content.push_str(&format!(
-            "Program: {}\n\
-            Applications per place: {:.2}\n\
+            "Program: {} ({})\n\
             Eager applicants per place: {:.2}\n\
-            Total applications per place: {:.2}\n\
-            Top candidates average score: {:.2}\n\
+            Top candidates average priority: {:.2}\n\
+            Average score: {:.2}\n\
             Available places: {}\n\
-            Total applications: {}\n\
             Total eager applicants: {}\n\n",
             popularity.program_name,
-            popularity.applications_per_place,
+            popularity.funding_source,
             eager_per_place,
-            total_per_place,
-            popularity.top_third_average_score,
+            popularity.top_candidates_average_priority,
+            popularity.average_score,
             popularity.available_places,
-            popularity.total_applications,
-            popularity.eager_applicants.len()
+            popularity.total_eager_applicants
         ));
     }
 
@@ -417,6 +355,46 @@ fn print_summary(
     }
 }
 
+fn print_unified_summary(
+    analysis: &analyzer::AdmissionAnalysis,
+    chance_analysis: &ChanceAnalysis,
+) {
+    println!("\n📊 UNIFIED PRIORITY-BASED ADMISSION ANALYSIS");
+    println!("==========================================\n");
+    
+    println!("🏆 Program Popularity Ranking (by average priority):");
+    for (i, popularity) in analysis.program_popularities.iter().enumerate().take(10) {
+        let eager_per_place = popularity.eager_applicants.len() as f64 / popularity.available_places as f64;
+        println!(
+            "   {}. {} ({}) - {:.1} eager applicants per place (avg score: {:.2}, avg priority: {:.2})",
+            i + 1,
+            popularity.program_name,
+            popularity.funding_source,
+            eager_per_place,
+            popularity.average_score,
+            popularity.top_candidates_average_priority
+        );
+    }
+    
+    println!("\n🎯 Target Applicant Results:");
+    if analysis.target_applicant_found {
+        println!("✅ Target applicant found in the data");
+        println!("📋 Application Results:");
+        for (program_key, admitted) in &analysis.target_applicant_results {
+            let status = if *admitted { "✅ ADMITTED" } else { "❌ Not admitted" };
+            println!("   • {}: {}", program_key, status);
+        }
+        println!("\n📝 Final Recommendation:");
+        println!("   {}", chance_analysis.final_recommendation);
+    } else {
+        println!("❌ Target applicant not found in the data");
+        println!("   This could mean:");
+        println!("   • The SNILS is incorrect");
+        println!("   • The applicant didn't apply to any programs");
+        println!("   • The data source doesn't contain this applicant");
+    }
+}
+
 fn print_funding_analysis(
     funding_type: &str,
     analysis: &analyzer::AdmissionAnalysis,
@@ -430,11 +408,13 @@ fn print_funding_analysis(
     for (i, popularity) in analysis.program_popularities.iter().enumerate() {
         let eager_per_place = popularity.eager_applicants.len() as f64 / popularity.available_places as f64;
         println!(
-            "   {}. {} - {:.1} eager applicants per place (avg score: {:.2})",
+            "   {}. {} ({}) - {:.1} eager applicants per place (avg score: {:.2}, avg priority: {:.2})",
             i + 1,
             popularity.program_name,
+            popularity.funding_source,
             eager_per_place,
-            popularity.top_third_average_score
+            popularity.average_score,
+            popularity.top_candidates_average_priority
         );
     }
     
@@ -844,9 +824,14 @@ fn generate_available_places_csvs(
     let admitted_dir = Path::new(output_dir).join("admitted_lists");
     fs::create_dir_all(&admitted_dir)?;
 
-    // Use the analysis results directly instead of doing our own simulation
-    for (program_name, admitted_snils_list) in &analysis.final_admission_results {
-        let safe_name = program_name.replace("/", "_").replace(" ", "_");
+    // Get target SNILS from the analysis
+    let config = models::Config::load_from_file("config.toml").unwrap_or_default();
+    let target_snils = config.target_snils;
+    let normalized_target = normalize_snils(&target_snils);
+
+    // Process each program-funding combination
+    for (program_key, admitted_snils_list) in &analysis.final_admission_results {
+        let safe_name = program_key.replace("/", "_").replace(" ", "_");
         let csv_path = admitted_dir.join(format!("{}_admitted.csv", safe_name));
         let mut writer = Writer::from_path(csv_path)?;
 
@@ -857,22 +842,86 @@ fn generate_available_places_csvs(
             "Available_Places", "Admission_Status"
         ])?;
 
-        // Find the program records to get full details for admitted students
-        if let Some((_, program_records)) = all_program_records.iter().find(|(name, _)| name == program_name) {
+        // Parse program_key to get program_name and funding_source
+        let (program_name, funding_source) = if program_key.ends_with("_Бюджетное финансирование") {
+            let name_part = program_key.strip_suffix("_Бюджетное финансирование").unwrap();
+            (name_part.to_string(), "Бюджетное финансирование".to_string())
+        } else if program_key.ends_with("_Коммерческое финансирование") {
+            let name_part = program_key.strip_suffix("_Коммерческое финансирование").unwrap();
+            (name_part.to_string(), "Коммерческое финансирование".to_string())
+        } else {
+            // Fallback for other funding types
+            let last_underscore_pos = program_key.rfind('_').unwrap_or(0);
+            if last_underscore_pos == 0 {
+                continue; // Skip malformed keys
+            }
+            let program_name = program_key[..last_underscore_pos].to_string();
+            let funding_source = program_key[last_underscore_pos + 1..].to_string();
+            (program_name, funding_source)
+        };
+
+        // Find matching records in all_program_records
+        let mut matching_records = Vec::new();
+        let mut target_record: Option<models::StudentRecord> = None;
+        
+        for (record_program_name, program_records) in all_program_records {
+            if record_program_name == &program_name {
+                for record in program_records {
+                    if record.funding_source == funding_source {
+                        matching_records.push(record.clone());
+                        
+                        // Check if this is the target applicant
+                        if normalize_snils(&record.snils) == normalized_target {
+                            target_record = Some(record.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        if !matching_records.is_empty() {
+            // Sort matching records by rank to maintain order
+            matching_records.sort_by_key(|r| r.rank);
+            
             // Create a map of admitted SNILS for quick lookup
             let admitted_snils_set: std::collections::HashSet<String> = admitted_snils_list
                 .iter()
                 .map(|snils| normalize_snils(snils))
                 .collect();
 
-            // Find all records for admitted students and write them
-            for record in program_records {
+            let available_places = matching_records[0].available_places as usize;
+            let mut admission_position = 0;
+            let mut target_written = false;
+
+            // Write all admitted students with position tracking
+            for record in &matching_records {
                 let normalized_record_snils = normalize_snils(&record.snils);
                 if admitted_snils_set.contains(&normalized_record_snils) {
-                    let admission_status = match record.funding_source.as_str() {
-                        "Бюджетное финансирование" => "Admitted_Budget",
-                        "Коммерческое финансирование" => "Admitted_Commercial",
-                        _ => "Admitted_Other",
+                    admission_position += 1;
+                    
+                    // Determine admission status - only add +/- for target applicant
+                    let admission_status = if normalized_record_snils == normalized_target {
+                        // For target applicant, include +/- based on admission position vs available places
+                        if admission_position <= available_places {
+                            match record.funding_source.as_str() {
+                                "Бюджетное финансирование" => "Admitted_Budget+",
+                                "Коммерческое финансирование" => "Admitted_Commercial+",
+                                _ => "Admitted_Other+",
+                            }
+                        } else {
+                            match record.funding_source.as_str() {
+                                "Бюджетное финансирование" => "Admitted_Budget-",
+                                "Коммерческое финансирование" => "Admitted_Commercial-",
+                                _ => "Admitted_Other-",
+                            }
+                        }
+                    } else {
+                        // For other students, just basic admission status without +/-
+                        match record.funding_source.as_str() {
+                            "Бюджетное финансирование" => "Admitted_Budget",
+                            "Коммерческое финансирование" => "Admitted_Commercial",
+                            _ => "Admitted_Other",
+                        }
                     };
 
                     writer.write_record(&[
@@ -887,6 +936,43 @@ fn generate_available_places_csvs(
                         &record.funding_source,
                         &record.study_form,
                         &record.available_places.to_string(),
+                        admission_status,
+                    ])?;
+                    
+                    // Mark if we wrote the target applicant
+                    if normalized_record_snils == normalized_target {
+                        target_written = true;
+                    }
+                }
+            }
+
+            // Always include target applicant if they applied to this program, regardless of admission status
+            if let Some(target_rec) = target_record {
+                if !target_written {
+                    // Target applied but wasn't admitted - find their rank position in the full ranking
+                    let target_rank_position = matching_records.iter()
+                        .position(|r| normalize_snils(&r.snils) == normalized_target)
+                        .map(|pos| pos + 1)
+                        .unwrap_or(0);
+                    
+                    let admission_status = if target_rank_position <= available_places {
+                        "Target_NotAdmitted+"  // Would be within places by rank but wasn't admitted due to priority logic
+                    } else {
+                        "Target_NotAdmitted-"  // Outside available places by rank
+                    };
+
+                    writer.write_record(&[
+                        &target_rec.rank.to_string(),
+                        &target_rec.snils,
+                        &target_rec.priority.to_string(),
+                        &target_rec.consent,
+                        &target_rec.document_type,
+                        &target_rec.average_score,
+                        &target_rec.subject_scores,
+                        &target_rec.psychological_test,
+                        &target_rec.funding_source,
+                        &target_rec.study_form,
+                        &target_rec.available_places.to_string(),
                         admission_status,
                     ])?;
                 }
@@ -924,267 +1010,167 @@ fn generate_final_cutoff_analysis(
 
     let normalized_target = normalize_snils(&chance_analysis.target_snils);
 
-    for (program_name, records) in all_program_records {
-        let mut found_target = false;
+    // Process each program-funding combination from admission results
+    for (program_key, admitted_snils_list) in &analysis.final_admission_results {
+        // Parse program_key to get program_name and funding_source
+        let (program_name, funding_source) = if program_key.ends_with("_Бюджетное финансирование") {
+            let name_part = program_key.strip_suffix("_Бюджетное финансирование").unwrap();
+            (name_part.to_string(), "Бюджетное финансирование".to_string())
+        } else if program_key.ends_with("_Коммерческое финансирование") {
+            let name_part = program_key.strip_suffix("_Коммерческое финансирование").unwrap();
+            (name_part.to_string(), "Коммерческое финансирование".to_string())
+        } else {
+            let last_underscore_pos = program_key.rfind('_').unwrap_or(0);
+            if last_underscore_pos == 0 {
+                continue; // Skip malformed keys
+            }
+            let program_name = program_key[..last_underscore_pos].to_string();
+            let funding_source = program_key[last_underscore_pos + 1..].to_string();
+            (program_name, funding_source)
+        };
+
+        // Find matching records in all_program_records
+        let mut target_record: Option<models::StudentRecord> = None;
+        let mut all_matching_records = Vec::new();
         
-        for record in records {
-            if normalize_snils(&record.snils) == normalized_target {
-                found_target = true;
-                
-                // Check if the target applicant was actually admitted to this program
-                let is_admitted = analysis.final_admission_results
-                    .get(program_name)
-                    .map(|admitted_list| {
-                        admitted_list.iter().any(|snils| normalize_snils(snils) == normalized_target)
-                    })
-                    .unwrap_or(false);
-
-                // Calculate actual cutoff score from admission results, not from eager applicants
-                let cutoff_score = if let Some(admitted_list) = analysis.final_admission_results.get(program_name) {
-                    if !admitted_list.is_empty() {
-                        // Find the lowest score among admitted applicants
-                        let mut lowest_score = f64::MAX;
-                        for admitted_snils in admitted_list {
-                            for record_check in records {
-                                if normalize_snils(&record_check.snils) == normalize_snils(admitted_snils) {
-                                    if let Some(score) = record_check.get_numeric_score() {
-                                        lowest_score = lowest_score.min(score);
-                                    }
-                                }
-                            }
-                        }
-                        if lowest_score == f64::MAX { 0.0 } else { lowest_score }
-                    } else {
-                        0.0
-                    }
-                } else {
-                    0.0
-                };
-
-                let target_score = record.get_numeric_score().unwrap_or(0.0);
-                
-                // Calculate how many eager applicants are between target and last available position
-                let applicants_behind = if !is_admitted {
-                    // Get all eager applicants for this program, sorted by rank
-                    let eager_applicants: Vec<&models::StudentRecord> = records
-                        .iter()
-                        .filter(|r| r.has_original_document() || r.has_consent())
-                        .collect();
-                    
-                    // Find target position in eager applicants list
-                    let target_position_in_eager = eager_applicants
-                        .iter()
-                        .position(|r| normalize_snils(&r.snils) == normalized_target);
-
-                    // Find the last available position in the program
-                    let snils_of_last_available = analysis
-                        .final_admission_results
-                        .get(program_name)
-                        .and_then(|admitted_list| admitted_list.last())
-                        .map(|snils| normalize_snils(snils))
-                        .unwrap_or_default();
-
-                    // Find the last available position in the eager applicants list
-                    let last_available_position = eager_applicants
-                        .iter()
-                        .position(|r| normalize_snils(&r.snils) == snils_of_last_available).unwrap_or_default();
-
-                    if let Some(target_pos) = target_position_in_eager {
-                        let available_places = record.available_places as usize;
-                        let target_pos_1_based = target_pos + 1; // Convert to 1-based position
+        for (record_program_name, program_records) in all_program_records {
+            if record_program_name == &program_name {
+                for record in program_records {
+                    if record.funding_source == funding_source {
+                        all_matching_records.push(record.clone());
                         
-                        if target_pos_1_based > available_places {
-                            // Count eager applicants between available_places and target position
-                            target_pos_1_based - last_available_position - 1
-                        } else {
-                            0
+                        // Check if this is the target applicant
+                        if normalize_snils(&record.snils) == normalized_target {
+                            target_record = Some(record.clone());
                         }
-                    } else {
-                        0
                     }
+                }
+            }
+        }
+
+        if all_matching_records.is_empty() {
+            continue;
+        }
+
+        // Sort records by rank to maintain order
+        all_matching_records.sort_by_key(|r| r.rank);
+        let available_places = all_matching_records[0].available_places as usize;
+
+        // Check if target was admitted to this specific program-funding combination
+        let is_admitted = admitted_snils_list
+            .iter()
+            .any(|snils| normalize_snils(snils) == normalized_target);
+
+        // Calculate actual cutoff score (lowest score among admitted applicants)
+        let cutoff_score = if !admitted_snils_list.is_empty() {
+            let mut lowest_score = f64::MAX;
+            for admitted_snils in admitted_snils_list {
+                for record in &all_matching_records {
+                    if normalize_snils(&record.snils) == normalize_snils(admitted_snils) {
+                        if let Some(score) = record.get_numeric_score() {
+                            lowest_score = lowest_score.min(score);
+                        }
+                    }
+                }
+            }
+            if lowest_score == f64::MAX { 0.0 } else { lowest_score }
+        } else {
+            0.0
+        };
+
+        if let Some(target_rec) = target_record {
+            let target_score = target_rec.get_numeric_score().unwrap_or(0.0);
+            
+            // Calculate position and status
+            let (admission_status, status_detail, position_info) = if is_admitted {
+                let position = admitted_snils_list
+                    .iter()
+                    .position(|snils| normalize_snils(snils) == normalized_target)
+                    .map(|pos| pos + 1)
+                    .unwrap_or(0);
+                
+                let position_str = format!("Position in admitted list: {} (of {} admitted)\n", position, admitted_snils_list.len());
+                ("Admitted".to_string(), String::new(), position_str)
+            } else {
+                // Find target's rank position in the full list
+                let target_rank_position = all_matching_records
+                    .iter()
+                    .position(|r| normalize_snils(&r.snils) == normalized_target)
+                    .map(|pos| pos + 1)
+                    .unwrap_or(0);
+                
+                let applicants_behind = if target_rank_position > available_places {
+                    target_rank_position - available_places
                 } else {
                     0
                 };
-
-                let (admission_status, status_detail) = if is_admitted {
-                    ("Admitted".to_string(), String::new())
-                } else {
-                    let detail = if applicants_behind > 0 {
-                        format!(" ({} applicants behind)", applicants_behind)
-                    } else {
-                        String::new()
-                    };
-                    ("Not_Admitted".to_string(), detail)
-                };
-
-                // Find position in admitted list if admitted
-                let position_info = if is_admitted {
-                    if let Some(admitted_list) = analysis.final_admission_results.get(program_name) {
-                        let position = admitted_list
-                            .iter()
-                            .position(|snils| normalize_snils(snils) == normalized_target)
-                            .map(|pos| pos + 1); // Convert to 1-based position
-                        
-                        if let Some(pos) = position {
-                            format!("Position in admitted list: {} (of {} admitted)\n", pos, admitted_list.len())
-                        } else {
-                            String::new()
-                        }
-                    } else {
-                        String::new()
-                    }
+                
+                let detail = if applicants_behind > 0 {
+                    format!(" ({} applicants behind)", applicants_behind)
                 } else {
                     String::new()
                 };
+                
+                ("Not_Admitted".to_string(), detail, String::new())
+            };
 
-                content.push_str(&format!(
-                    "Program: {}\n\
-                    Funding: {}\n\
-                    {}Available places: {}\n\
-                    Target score: {:.4}\n\
-                    Cutoff score: {:.4}\n\
-                    Status: {}{}\n\n",
-                    program_name,
-                    record.funding_source,
-                    position_info,
-                    record.available_places,
-                    target_score,
-                    cutoff_score,
-                    admission_status,
-                    status_detail
-                ));
+            content.push_str(&format!(
+                "Program: {}\n\
+                Funding: {}\n\
+                {}Available places: {}\n\
+                Target score: {:.4}\n\
+                Cutoff score: {:.4}\n\
+                Status: {}{}\n\n",
+                program_name,
+                funding_source,
+                position_info,
+                available_places,
+                target_score,
+                cutoff_score,
+                admission_status,
+                status_detail
+            ));
 
-                let position_csv = if is_admitted {
-                    if let Some(admitted_list) = analysis.final_admission_results.get(program_name) {
-                        let position = admitted_list
-                            .iter()
-                            .position(|snils| normalize_snils(snils) == normalized_target)
-                            .map(|pos| pos + 1)
-                            .unwrap_or(0);
-                        format!("Position {} of {}", position, admitted_list.len())
-                    } else {
-                        "Admitted".to_string()
-                    }
-                } else {
-                    "Not in list".to_string()
-                };
-
-                csv_writer.write_record(&[
-                    program_name,
-                    &record.funding_source,
-                    &position_csv,
-                    &record.available_places.to_string(),
-                    &format!("{:.4}", target_score),
-                    &format!("{:.4}", cutoff_score),
-                    &position_csv,
-                    &admission_status,
-                ])?;
-            }
-        }
-        
-        if !found_target {
-            // Provide hypothetical analysis even when target not found in this program
-            if let Some(program_records) = all_program_records.iter().find(|(name, _)| name == program_name).map(|(_, records)| records) {
-                if !program_records.is_empty() {
-                    let available_places = program_records[0].available_places;
-                    
-                    // Calculate cutoff score from admission results
-                    let cutoff_score = if let Some(admitted_list) = analysis.final_admission_results.get(program_name) {
-                        if !admitted_list.is_empty() {
-                            let mut lowest_score = f64::MAX;
-                            for admitted_snils in admitted_list {
-                                for record_check in program_records {
-                                    if normalize_snils(&record_check.snils) == normalize_snils(admitted_snils) {
-                                        if let Some(score) = record_check.get_numeric_score() {
-                                            lowest_score = lowest_score.min(score);
-                                        }
-                                    }
-                                }
-                            }
-                            if lowest_score == f64::MAX { 0.0 } else { lowest_score }
-                        } else {
-                            0.0
-                        }
-                    } else {
-                        0.0
-                    };
-                    
-                    // Get target score from config (we need to estimate it)
-                    // For now, let's use a placeholder - this would need to be passed in
-                    // or we could try to find the target in any other program to get their score
-                    let target_score = all_program_records.iter()
-                        .flat_map(|(_, records)| records)
-                        .find(|r| normalize_snils(&r.snils) == normalized_target)
-                        .and_then(|r| r.get_numeric_score())
-                        .unwrap_or(0.0);
-                    
-                    let funding_source = &program_records[0].funding_source;
-                    
-                    // Determine hypothetical status
-                    let (hypothetical_status, analysis_text) = if target_score > cutoff_score && cutoff_score > 0.0 {
-                        ("Would_Be_Admitted", format!("Hypothetical: Would likely be admitted (score {:.4} > cutoff {:.4})", target_score, cutoff_score))
-                    } else if cutoff_score > 0.0 {
-                        // Calculate how many admitted applicants have lower scores
-                        let mut better_scores = 0;
-                        if let Some(admitted_list) = analysis.final_admission_results.get(program_name) {
-                            for admitted_snils in admitted_list {
-                                for record_check in program_records {
-                                    if normalize_snils(&record_check.snils) == normalize_snils(admitted_snils) {
-                                        if let Some(score) = record_check.get_numeric_score() {
-                                            if score > target_score {
-                                                better_scores += 1;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        let behind_text = if better_scores > 0 {
-                            format!(" ({} admitted applicants have better scores)", better_scores)
-                        } else {
-                            String::new()
-                        };
-                        ("Would_Not_Be_Admitted", format!("Hypothetical: Would not be admitted (score {:.4} < cutoff {:.4}){}", target_score, cutoff_score, behind_text))
-                    } else {
-                        ("Unknown", "Hypothetical: Cannot determine (insufficient data)".to_string())
-                    };
-                    
-                    content.push_str(&format!(
-                        "Program: {} - Target applicant not found\n\
-                        Funding: {}\n\
-                        Available places: {}\n\
-                        Target score: {:.4}\n\
-                        Cutoff score: {:.4}\n\
-                        Status: {}\n\n",
-                        program_name,
-                        funding_source,
-                        available_places,
-                        target_score,
-                        cutoff_score,
-                        analysis_text
-                    ));
-                    
-                    csv_writer.write_record(&[
-                        program_name,
-                        funding_source,
-                        "Not in list",
-                        &available_places.to_string(),
-                        &format!("{:.4}", target_score),
-                        &format!("{:.4}", cutoff_score),
-                        "Hypothetical",
-                        &hypothetical_status,
-                    ])?;
-                } else {
-                    content.push_str(&format!("Program: {} - No data available\n\n", program_name));
-                }
+            let position_csv = if is_admitted {
+                let position = admitted_snils_list
+                    .iter()
+                    .position(|snils| normalize_snils(snils) == normalized_target)
+                    .map(|pos| pos + 1)
+                    .unwrap_or(0);
+                format!("Position {} of {}", position, admitted_snils_list.len())
             } else {
-                content.push_str(&format!("Program: {} - Target applicant not found\n\n", program_name));
-            }
+                "Not in list".to_string()
+            };
+
+            csv_writer.write_record(&[
+                &program_name,
+                &funding_source,
+                &position_csv,
+                &available_places.to_string(),
+                &format!("{:.4}", target_score),
+                &format!("{:.4}", cutoff_score),
+                &position_csv,
+                &admission_status,
+            ])?;
+        } else {
+            // Target applicant not found in this program-funding combination
+            content.push_str(&format!(
+                "Program: {} - Target applicant not found\n\
+                Funding: {}\n\
+                Available places: {}\n\
+                Target score: N/A\n\
+                Cutoff score: {:.4}\n\
+                Status: Hypothetical: Cannot determine (target did not apply)\n\n",
+                program_name,
+                funding_source,
+                available_places,
+                cutoff_score
+            ));
         }
     }
 
-    csv_writer.flush()?;
     fs::write(final_path, content)?;
+    csv_writer.flush()?;
     Ok(())
 }
 
