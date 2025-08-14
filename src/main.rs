@@ -1044,7 +1044,103 @@ fn generate_final_cutoff_analysis(
         }
         
         if !found_target {
-            content.push_str(&format!("Program: {} - Target applicant not found\n\n", program_name));
+            // Provide hypothetical analysis even when target not found in this program
+            if let Some(program_records) = all_program_records.iter().find(|(name, _)| name == program_name).map(|(_, records)| records) {
+                if !program_records.is_empty() {
+                    let available_places = program_records[0].available_places;
+                    
+                    // Calculate cutoff score from admission results
+                    let cutoff_score = if let Some(admitted_list) = analysis.final_admission_results.get(program_name) {
+                        if !admitted_list.is_empty() {
+                            let mut lowest_score = f64::MAX;
+                            for admitted_snils in admitted_list {
+                                for record_check in program_records {
+                                    if normalize_snils(&record_check.snils) == normalize_snils(admitted_snils) {
+                                        if let Some(score) = record_check.get_numeric_score() {
+                                            lowest_score = lowest_score.min(score);
+                                        }
+                                    }
+                                }
+                            }
+                            if lowest_score == f64::MAX { 0.0 } else { lowest_score }
+                        } else {
+                            0.0
+                        }
+                    } else {
+                        0.0
+                    };
+                    
+                    // Get target score from config (we need to estimate it)
+                    // For now, let's use a placeholder - this would need to be passed in
+                    // or we could try to find the target in any other program to get their score
+                    let target_score = all_program_records.iter()
+                        .flat_map(|(_, records)| records)
+                        .find(|r| normalize_snils(&r.snils) == normalized_target)
+                        .and_then(|r| r.get_numeric_score())
+                        .unwrap_or(0.0);
+                    
+                    let funding_source = &program_records[0].funding_source;
+                    
+                    // Determine hypothetical status
+                    let (hypothetical_status, analysis_text) = if target_score > cutoff_score && cutoff_score > 0.0 {
+                        ("Would_Be_Admitted", format!("Hypothetical: Would likely be admitted (score {:.4} > cutoff {:.4})", target_score, cutoff_score))
+                    } else if cutoff_score > 0.0 {
+                        // Calculate how many admitted applicants have lower scores
+                        let mut better_scores = 0;
+                        if let Some(admitted_list) = analysis.final_admission_results.get(program_name) {
+                            for admitted_snils in admitted_list {
+                                for record_check in program_records {
+                                    if normalize_snils(&record_check.snils) == normalize_snils(admitted_snils) {
+                                        if let Some(score) = record_check.get_numeric_score() {
+                                            if score > target_score {
+                                                better_scores += 1;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        let behind_text = if better_scores > 0 {
+                            format!(" ({} admitted applicants have better scores)", better_scores)
+                        } else {
+                            String::new()
+                        };
+                        ("Would_Not_Be_Admitted", format!("Hypothetical: Would not be admitted (score {:.4} < cutoff {:.4}){}", target_score, cutoff_score, behind_text))
+                    } else {
+                        ("Unknown", "Hypothetical: Cannot determine (insufficient data)".to_string())
+                    };
+                    
+                    content.push_str(&format!(
+                        "Program: {} - Target applicant not found\n\
+                        Funding: {}\n\
+                        Available places: {}\n\
+                        Target score: {:.4}\n\
+                        Cutoff score: {:.4}\n\
+                        Status: {}\n\n",
+                        program_name,
+                        funding_source,
+                        available_places,
+                        target_score,
+                        cutoff_score,
+                        analysis_text
+                    ));
+                    
+                    csv_writer.write_record(&[
+                        program_name,
+                        funding_source,
+                        "Not in list",
+                        &available_places.to_string(),
+                        &format!("{:.4}", target_score),
+                        &format!("{:.4}", cutoff_score),
+                        "Hypothetical",
+                        &hypothetical_status,
+                    ])?;
+                } else {
+                    content.push_str(&format!("Program: {} - No data available\n\n", program_name));
+                }
+            } else {
+                content.push_str(&format!("Program: {} - Target applicant not found\n\n", program_name));
+            }
         }
     }
 
