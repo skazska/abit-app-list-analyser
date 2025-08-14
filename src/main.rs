@@ -473,7 +473,7 @@ fn print_funding_analysis(
                         program_info.push(format!("🚫 {}", status));
                     }
                 }
-            } else if line.starts_with("Target score: ") || line.starts_with("Cutoff score: ") || line.starts_with("Available places: ") {
+            } else if line.starts_with("Target score: ") || line.starts_with("Cutoff score: ") || line.starts_with("Available places: ") || line.starts_with("Position in admitted list: ") {
                 program_info.push(format!("   {}", line));
             }
         }

@@ -373,11 +373,14 @@ impl AdmissionAnalyzer {
         let total_applications = records.len();
         
         // Filter for eager applicants (have original document OR consent)
-        let eager_applicants: Vec<StudentRecord> = records
+        let mut eager_applicants: Vec<StudentRecord> = records
             .iter()
             .filter(|record| record.has_original_document() || record.has_consent())
             .cloned()
             .collect();
+        
+        // Sort eager applicants by rank (best rank first - ascending order)
+        eager_applicants.sort_by_key(|record| record.rank);
 
         let total_applicants = eager_applicants.len();
         let applications_per_place = total_applicants as f64 / available_places as f64;
