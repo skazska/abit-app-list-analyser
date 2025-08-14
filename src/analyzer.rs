@@ -197,20 +197,35 @@ impl AdmissionAnalyzer {
         program_funding_groups: &HashMap<String, HashMap<String, Vec<StudentRecord>>>,
     ) -> HashMap<String, Vec<String>> {
         let mut final_results = HashMap::new();
+        let mut excluded_normalized_snils = std::collections::HashSet::new();
+
+        // If we have budget exclusions, exclude students admitted to programs in budget analysis
+        if let Some(ref budget_analysis) = self.budget_exclusions {
+            for (_, admitted_list) in &budget_analysis.final_admission_results {
+                for snils in admitted_list {
+                    // For commercial funding, exclude students admitted to budget programs
+                    // except if it's the target applicant and they're applying to the same program
+                    let normalized_snils = normalize_snils(snils);
+                    if normalize_snils(&self.target_snils) != normalized_snils {
+                        excluded_normalized_snils.insert(normalized_snils);
+                    }
+                }
+            }
+        }
 
         // Process programs from most to least popular
         for popularity in program_popularities {
             let program_name = &popularity.program_name;
-            let mut excluded_normalized_snils = std::collections::HashSet::new();
             
-            // If we have budget exclusions, exclude students admitted to OTHER programs
+            // For commercial funding with budget exclusions, allow target applicant 
+            // to be considered for the same program even if they were admitted to budget
+            let mut local_excluded = excluded_normalized_snils.clone();
             if let Some(ref budget_analysis) = self.budget_exclusions {
-                for (budget_program_name, admitted_list) in &budget_analysis.final_admission_results {
-                    // Only exclude if it's a different program
-                    if budget_program_name != program_name {
-                        for snils in admitted_list {
-                            excluded_normalized_snils.insert(normalize_snils(snils));
-                        }
+                if let Some(budget_admitted) = budget_analysis.final_admission_results.get(program_name) {
+                    let target_normalized = normalize_snils(&self.target_snils);
+                    // Allow target applicant to be reconsidered for same program in commercial
+                    if budget_admitted.iter().any(|snils| normalize_snils(snils) == target_normalized) {
+                        local_excluded.remove(&target_normalized);
                     }
                 }
             }
@@ -222,9 +237,14 @@ impl AdmissionAnalyzer {
                 for records in funding_groups.values() {
                     let admitted = self.process_funding_type(
                         records,
-                        &mut excluded_normalized_snils,
+                        &mut local_excluded,
                     );
                     all_admitted_to_program.extend(admitted);
+                }
+                
+                // Update the global excluded set with newly admitted students
+                for snils in &all_admitted_to_program {
+                    excluded_normalized_snils.insert(normalize_snils(snils));
                 }
                 
                 final_results.insert(program_name.clone(), all_admitted_to_program);
