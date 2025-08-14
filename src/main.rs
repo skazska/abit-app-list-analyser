@@ -840,7 +840,7 @@ fn generate_available_places_csvs(
 
 // 5. Generate final cutoff analysis for programs of interest with target applicant position
 fn generate_final_cutoff_analysis(
-    _analysis: &analyzer::AdmissionAnalysis,
+    analysis: &analyzer::AdmissionAnalysis,
     chance_analysis: &analyzer::ChanceAnalysis,
     all_program_records: &[(String, Vec<models::StudentRecord>)],
     output_dir: &str,
@@ -870,26 +870,41 @@ fn generate_final_cutoff_analysis(
             if normalize_snils(&record.snils) == normalized_target {
                 found_target = true;
                 
-                // Find cutoff score (score of last admitted applicant)
-                let eager_applicants: Vec<&models::StudentRecord> = records
-                    .iter()
-                    .filter(|r| r.has_original_document() || r.has_consent())
-                    .collect();
-                
-                let cutoff_rank = std::cmp::min(record.available_places as usize, eager_applicants.len());
-                let cutoff_score = if cutoff_rank > 0 {
-                    eager_applicants.get(cutoff_rank - 1)
-                        .and_then(|r| r.get_numeric_score())
-                        .unwrap_or(0.0)
+                // Check if the target applicant was actually admitted to this program
+                let is_admitted = analysis.final_admission_results
+                    .get(program_name)
+                    .map(|admitted_list| {
+                        admitted_list.iter().any(|snils| normalize_snils(snils) == normalized_target)
+                    })
+                    .unwrap_or(false);
+
+                // Calculate actual cutoff score from admission results, not from eager applicants
+                let cutoff_score = if let Some(admitted_list) = analysis.final_admission_results.get(program_name) {
+                    if !admitted_list.is_empty() {
+                        // Find the lowest score among admitted applicants
+                        let mut lowest_score = f64::MAX;
+                        for admitted_snils in admitted_list {
+                            for record_check in records {
+                                if normalize_snils(&record_check.snils) == normalize_snils(admitted_snils) {
+                                    if let Some(score) = record_check.get_numeric_score() {
+                                        lowest_score = lowest_score.min(score);
+                                    }
+                                }
+                            }
+                        }
+                        if lowest_score == f64::MAX { 0.0 } else { lowest_score }
+                    } else {
+                        0.0
+                    }
                 } else {
                     0.0
                 };
 
                 let target_score = record.get_numeric_score().unwrap_or(0.0);
-                let admission_status = if record.rank <= record.available_places {
-                    "Within_Places"
+                let admission_status = if is_admitted {
+                    "Admitted"
                 } else {
-                    "Beyond_Places"
+                    "Not_Admitted"
                 };
 
                 content.push_str(&format!(
