@@ -879,8 +879,8 @@ fn generate_final_cutoff_analysis(
 
     let mut csv_writer = Writer::from_path(final_csv_path)?;
     csv_writer.write_record(&[
-        "Program", "Funding_Type", "Target_Rank", "Available_Places", 
-        "Target_Score", "Cutoff_Score", "Target_Position", "Admission_Status"
+        "Program", "Funding_Type", "Position_In_Admitted", "Available_Places", 
+        "Target_Score", "Cutoff_Score", "Admission_Position", "Admission_Status"
     ])?;
 
     let normalized_target = normalize_snils(&chance_analysis.target_snils);
@@ -978,16 +978,36 @@ fn generate_final_cutoff_analysis(
                     ("Not_Admitted".to_string(), detail)
                 };
 
+                // Find position in admitted list if admitted
+                let position_info = if is_admitted {
+                    if let Some(admitted_list) = analysis.final_admission_results.get(program_name) {
+                        let position = admitted_list
+                            .iter()
+                            .position(|snils| normalize_snils(snils) == normalized_target)
+                            .map(|pos| pos + 1); // Convert to 1-based position
+                        
+                        if let Some(pos) = position {
+                            format!("Position in admitted list: {} (of {} admitted)\n", pos, admitted_list.len())
+                        } else {
+                            String::new()
+                        }
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    String::new()
+                };
+
                 content.push_str(&format!(
                     "Program: {}\n\
                     Funding: {}\n\
-                    Target rank: {} (of available {} places)\n\
+                    {}Available places: {}\n\
                     Target score: {:.4}\n\
                     Cutoff score: {:.4}\n\
                     Status: {}{}\n\n",
                     program_name,
                     record.funding_source,
-                    record.rank,
+                    position_info,
                     record.available_places,
                     target_score,
                     cutoff_score,
@@ -995,14 +1015,29 @@ fn generate_final_cutoff_analysis(
                     status_detail
                 ));
 
+                let position_csv = if is_admitted {
+                    if let Some(admitted_list) = analysis.final_admission_results.get(program_name) {
+                        let position = admitted_list
+                            .iter()
+                            .position(|snils| normalize_snils(snils) == normalized_target)
+                            .map(|pos| pos + 1)
+                            .unwrap_or(0);
+                        format!("Position {} of {}", position, admitted_list.len())
+                    } else {
+                        "Admitted".to_string()
+                    }
+                } else {
+                    "Not in list".to_string()
+                };
+
                 csv_writer.write_record(&[
                     program_name,
                     &record.funding_source,
-                    &record.rank.to_string(),
+                    &position_csv,
                     &record.available_places.to_string(),
                     &format!("{:.4}", target_score),
                     &format!("{:.4}", cutoff_score),
-                    &format!("Rank {}", record.rank),
+                    &position_csv,
                     &admission_status,
                 ])?;
             }
