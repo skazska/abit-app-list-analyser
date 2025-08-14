@@ -280,19 +280,26 @@ fn generate_program_popularity_report(
     content.push_str("==========================\n\n");
 
     for popularity in &analysis.program_popularities {
+        let eager_per_place = popularity.eager_applicants.len() as f64 / popularity.available_places as f64;
+        let total_per_place = popularity.total_applications as f64 / popularity.available_places as f64;
+        
         content.push_str(&format!(
             "Program: {}\n\
             Applications per place: {:.2}\n\
+            Eager applicants per place: {:.2}\n\
+            Total applications per place: {:.2}\n\
             Top candidates average score: {:.2}\n\
             Available places: {}\n\
             Total applications: {}\n\
             Total eager applicants: {}\n\n",
             popularity.program_name,
             popularity.applications_per_place,
+            eager_per_place,
+            total_per_place,
             popularity.top_third_average_score,
             popularity.available_places,
             popularity.total_applications,
-            popularity.total_applicants
+            popularity.eager_applicants.len()
         ));
     }
 
@@ -573,6 +580,13 @@ fn generate_all_programs_popularity(
 
         // Print helper
         let mut print_entry = |e: &Entry| {
+            let eager_per_place = if e.available_places > 0 {
+                e.total_eager_applicants as f64 / e.available_places as f64
+            } else { 0.0 };
+            let total_per_place = if e.available_places > 0 {
+                e.total_applications as f64 / e.available_places as f64
+            } else { 0.0 };
+            
             content.push_str(&format!(
                 "{}. Program: {} ({})\n",
                 counter,
@@ -582,6 +596,14 @@ fn generate_all_programs_popularity(
             content.push_str(&format!(
                 "Applications per place: {:.2}\n",
                 e.applications_per_place,
+            ));
+            content.push_str(&format!(
+                "Eager applicants per place: {:.2}\n",
+                eager_per_place,
+            ));
+            content.push_str(&format!(
+                "Total applications per place: {:.2}\n",
+                total_per_place,
             ));
             content.push_str(&format!(
                 "Top candidates average score: {:.2}\n",
@@ -901,10 +923,39 @@ fn generate_final_cutoff_analysis(
                 };
 
                 let target_score = record.get_numeric_score().unwrap_or(0.0);
-                let admission_status = if is_admitted {
-                    "Admitted"
+                
+                // Calculate how many applicants are between target and last available position
+                // take position of target applicant in eager applicants list for program
+                // and extract available places count of program
+                let applicants_behind = if !is_admitted {
+                    // Count applicants between target rank and available places
+                    let last_available_rank = record.available_places as usize;
+                    let target_rank = record.rank as usize;
+                    
+                    if target_rank > last_available_rank {
+                        // Count applicants from position (last_available_rank + 1) to (target_rank - 1)
+                        records.iter()
+                            .filter(|r| {
+                                let rank = r.rank as usize;
+                                rank > last_available_rank && rank < target_rank
+                            })
+                            .count()
+                    } else {
+                        0
+                    }
                 } else {
-                    "Not_Admitted"
+                    0
+                };
+
+                let (admission_status, status_detail) = if is_admitted {
+                    ("Admitted".to_string(), String::new())
+                } else {
+                    let detail = if applicants_behind > 0 {
+                        format!(" ({} applicants behind)", applicants_behind)
+                    } else {
+                        String::new()
+                    };
+                    ("Not_Admitted".to_string(), detail)
                 };
 
                 content.push_str(&format!(
@@ -913,14 +964,15 @@ fn generate_final_cutoff_analysis(
                     Target rank: {} (of available {} places)\n\
                     Target score: {:.4}\n\
                     Cutoff score: {:.4}\n\
-                    Status: {}\n\n",
+                    Status: {}{}\n\n",
                     program_name,
                     record.funding_source,
                     record.rank,
                     record.available_places,
                     target_score,
                     cutoff_score,
-                    admission_status
+                    admission_status,
+                    status_detail
                 ));
 
                 csv_writer.write_record(&[
@@ -931,7 +983,7 @@ fn generate_final_cutoff_analysis(
                     &format!("{:.4}", target_score),
                     &format!("{:.4}", cutoff_score),
                     &format!("Rank {}", record.rank),
-                    admission_status,
+                    &admission_status,
                 ])?;
             }
         }
