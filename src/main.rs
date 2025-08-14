@@ -100,7 +100,6 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    let data_dir = config.data_directory.as_deref().unwrap_or("data-source");
     let output_dir = config.output_directory.as_deref().unwrap_or("output");
 
     // Create output directory if it doesn't exist
@@ -110,54 +109,98 @@ async fn main() -> Result<()> {
     clean_output_directory(output_dir)?;
 
     println!("🔍 Analyzing admission data for SNILS: {}", config.target_snils);
-    println!("📂 Reading HTML files from: {}", data_dir);
-    println!("📄 Output directory: {} (cleaned)", output_dir);
+    println!(" Output directory: {} (cleaned)", output_dir);
     if let Some(programs) = &config.programs_of_interest {
         println!("🎯 Programs of interest: {}", programs.join(", "));
     } else {
         println!("🎯 Programs of interest: ALL PROGRAMS");
     }
     println!("💰 Target funding types: {}", config.target_funding_types.join(", "));
+    println!("🌐 Data source mode: {:?}", config.data_source_mode);
 
     // Initialize components
     let scraper = scraper::AdmissionScraper::new();
 
-    // Process all HTML files
+    // Process data sources based on configuration
     let mut all_program_records = Vec::new();
     
-    for entry in fs::read_dir(data_dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        
-        if path.extension().and_then(|s| s.to_str()) == Some("html") {
-            println!("📄 Processing: {:?}", path.file_name().unwrap());
+    // Process local files if configured
+    if matches!(config.data_source_mode, models::DataSourceMode::Local | models::DataSourceMode::Both) {
+        if let Some(data_dir) = &config.data_directory {
+            println!("📂 Processing local files from: {}", data_dir);
             
-            match scraper.scrape_file(path.to_str().unwrap()) {
-                Ok(programs) => {
-                    for (program_info, records) in programs {
-                        let original_count = records.len();
-                        println!("   ✅ Found {} applicants for program: {}", 
-                               original_count, program_info.name);
+            if std::path::Path::new(data_dir).exists() {
+                for entry in fs::read_dir(data_dir)? {
+                    let entry = entry?;
+                    let path = entry.path();
+                    
+                    if path.extension().and_then(|s| s.to_str()) == Some("html") {
+                        println!("📄 Processing local file: {:?}", path.file_name().unwrap());
                         
-                        // Deduplicate records by SNILS within this program
-                        let deduplicated_records = deduplicate_records_by_snils(records);
-                        let duplicates_removed = original_count - deduplicated_records.len();
-                        if duplicates_removed > 0 {
-                            println!("   🔄 Removed {} duplicate SNILS records", duplicates_removed);
+                        match scraper.scrape_file(path.to_str().unwrap()) {
+                            Ok(programs) => {
+                                for (program_info, records) in programs {
+                                    let original_count = records.len();
+                                    println!("   ✅ Found {} applicants for program: {}", 
+                                           original_count, program_info.name);
+                                    
+                                    // Deduplicate records by SNILS within this program
+                                    let deduplicated_records = deduplicate_records_by_snils(records);
+                                    let duplicates_removed = original_count - deduplicated_records.len();
+                                    if duplicates_removed > 0 {
+                                        println!("   🔄 Removed {} duplicate SNILS records", duplicates_removed);
+                                    }
+                                    
+                                    all_program_records.push((program_info.name, deduplicated_records));
+                                }
+                            }
+                            Err(e) => {
+                                println!("   ❌ Error processing local file: {}", e);
+                            }
                         }
-                        
-                        all_program_records.push((program_info.name, deduplicated_records));
                     }
                 }
-                Err(e) => {
-                    println!("   ❌ Error processing file: {}", e);
+            } else {
+                println!("   ⚠️  Local data directory '{}' does not exist", data_dir);
+            }
+        }
+    }
+    
+    // Process internet URLs if configured
+    if matches!(config.data_source_mode, models::DataSourceMode::Internet | models::DataSourceMode::Both) {
+        if let Some(urls) = &config.internet_urls {
+            println!("🌐 Processing internet sources ({} URLs)", urls.len());
+            
+            for url in urls {
+                match scraper.scrape_url(url).await {
+                    Ok(programs) => {
+                        for (program_info, records) in programs {
+                            let original_count = records.len();
+                            println!("   ✅ Found {} applicants for program: {}", 
+                                   original_count, program_info.name);
+                            
+                            // Deduplicate records by SNILS within this program
+                            let deduplicated_records = deduplicate_records_by_snils(records);
+                            let duplicates_removed = original_count - deduplicated_records.len();
+                            if duplicates_removed > 0 {
+                                println!("   🔄 Removed {} duplicate SNILS records", duplicates_removed);
+                            }
+                            
+                            all_program_records.push((program_info.name, deduplicated_records));
+                        }
+                    }
+                    Err(e) => {
+                        println!("   ❌ Error processing URL {}: {}", url, e);
+                    }
                 }
             }
+        } else {
+            println!("   ⚠️  No internet URLs configured");
         }
     }
 
     if all_program_records.is_empty() {
-        println!("❌ No valid HTML files found in {}", data_dir);
+        println!("❌ No valid data sources found or all sources failed");
         return Ok(());
     }
 
@@ -185,7 +228,6 @@ async fn main() -> Result<()> {
 
     // Generate budget reports with filtered data
     generate_program_popularity_report(&budget_analysis, &budget_output_dir)?;
-    generate_chance_analysis_report(&budget_chance_analysis, &budget_output_dir)?;
     generate_detailed_csv(&budget_program_records, &budget_output_dir)?;
     generate_all_programs_popularity(&budget_program_records, &budget_output_dir)?;
     generate_individual_program_csvs(&budget_program_records, &budget_output_dir)?;
@@ -224,7 +266,6 @@ async fn main() -> Result<()> {
 
         // Generate commercial reports with filtered data
         generate_program_popularity_report(&commercial_analysis_result, &commercial_output_dir)?;
-        generate_chance_analysis_report(&commercial_chance_analysis_result, &commercial_output_dir)?;
         generate_detailed_csv(&commercial_program_records, &commercial_output_dir)?;
         generate_all_programs_popularity(&commercial_program_records, &commercial_output_dir)?;
         generate_individual_program_csvs(&commercial_program_records, &commercial_output_dir)?;
@@ -307,35 +348,6 @@ fn generate_program_popularity_report(
     Ok(())
 }
 
-fn generate_chance_analysis_report(
-    chance_analysis: &ChanceAnalysis,
-    output_dir: &str,
-) -> Result<()> {
-    let mut content = String::new();
-    content.push_str(&format!("Admission Chances Analysis for SNILS: {}\n", chance_analysis.target_snils));
-    content.push_str("==========================================\n\n");
-
-    if !chance_analysis.programs_admitted_to.is_empty() {
-        content.push_str("✅ Programs with admission chances:\n");
-        for program in &chance_analysis.programs_admitted_to {
-            content.push_str(&format!("   - {}\n", program));
-        }
-        content.push_str("\n");
-    }
-
-    if !chance_analysis.programs_rejected_from.is_empty() {
-        content.push_str("❌ Programs with low chances:\n");
-        for program in &chance_analysis.programs_rejected_from {
-            content.push_str(&format!("   - {}\n", program));
-        }
-        content.push_str("\n");
-    }
-
-    content.push_str(&format!("Recommendation:\n{}\n", chance_analysis.final_recommendation));
-
-    fs::write(Path::new(output_dir).join("chance_analysis.txt"), content)?;
-    Ok(())
-}
 
 fn generate_detailed_csv(
     all_program_records: &[(String, Vec<models::StudentRecord>)],
@@ -392,63 +404,90 @@ fn print_summary(
     commercial_analysis: Option<&analyzer::AdmissionAnalysis>,
     commercial_chance_analysis: Option<&ChanceAnalysis>,
 ) {
-    println!("\n📊 SUMMARY");
-    println!("==========\n");
+    println!("\n📊 COMPREHENSIVE ADMISSION ANALYSIS");
+    println!("===================================\n");
     
-    println!("� BUDGET FUNDING ANALYSIS:");
-    println!("�📈 Program Popularity (most to least competitive):");
-    for (i, popularity) in budget_analysis.program_popularities.iter().enumerate() {
+    // Print Budget Analysis
+    print_funding_analysis("BUDGET", budget_analysis, budget_chance_analysis, "budget");
+    
+    // Print Commercial Analysis if available
+    if let (Some(commercial_analysis), Some(commercial_chance_analysis)) = (commercial_analysis, commercial_chance_analysis) {
+        println!("\n");
+        print_funding_analysis("COMMERCIAL", commercial_analysis, commercial_chance_analysis, "commercial");
+    }
+}
+
+fn print_funding_analysis(
+    funding_type: &str,
+    analysis: &analyzer::AdmissionAnalysis,
+    chance_analysis: &ChanceAnalysis,
+    output_subdir: &str,
+) {
+    let icon = if funding_type == "BUDGET" { "💰" } else { "💳" };
+    
+    println!("{} {} FUNDING ANALYSIS:", icon, funding_type);
+    println!("{}📈 Program Popularity (most to least competitive):", "");
+    for (i, popularity) in analysis.program_popularities.iter().enumerate() {
+        let eager_per_place = popularity.eager_applicants.len() as f64 / popularity.available_places as f64;
         println!(
-            "   {}. {} - {:.1} applicants per place (avg score: {:.2})",
+            "   {}. {} - {:.1} eager applicants per place (avg score: {:.2})",
             i + 1,
             popularity.program_name,
-            popularity.applications_per_place,
+            eager_per_place,
             popularity.top_third_average_score
         );
     }
     
-    println!("\n🎯 Target Applicant Results (Budget):");
-    if budget_analysis.target_applicant_found {
-        if !budget_chance_analysis.programs_admitted_to.is_empty() {
-            println!("   ✅ Likely admitted to: {}", budget_chance_analysis.programs_admitted_to.join(", "));
+    println!("\n🎯 Detailed Cutoff Analysis:");
+    
+    // Read and display cutoff analysis
+    let cutoff_path = format!("output/{}/final_cutoff_analysis.txt", output_subdir);
+    if let Ok(cutoff_content) = fs::read_to_string(&cutoff_path) {
+        let lines: Vec<&str> = cutoff_content.lines().collect();
+        let mut current_program = String::new();
+        let mut program_info = Vec::new();
+        
+        for line in lines.iter().skip(3) { // Skip header lines
+            if line.is_empty() {
+                if !current_program.is_empty() && !program_info.is_empty() {
+                    println!("   📋 {}", current_program);
+                    for info in &program_info {
+                        println!("      {}", info);
+                    }
+                    println!();
+                }
+                current_program.clear();
+                program_info.clear();
+            } else if line.starts_with("Program: ") {
+                current_program = line.strip_prefix("Program: ").unwrap_or(line).to_string();
+            } else if line.starts_with("Status: ") {
+                let status = line.strip_prefix("Status: ").unwrap_or(line);
+                if status.contains("Admitted") {
+                    program_info.push(format!("✅ {}", status));
+                } else if status.contains("Not_Admitted") {
+                    program_info.push(format!("❌ {}", status));
+                } else if status.contains("Hypothetical") {
+                    if status.contains("Would likely be admitted") {
+                        program_info.push(format!("🔮 {}", status));
+                    } else {
+                        program_info.push(format!("🚫 {}", status));
+                    }
+                }
+            } else if line.starts_with("Target score: ") || line.starts_with("Cutoff score: ") || line.starts_with("Available places: ") {
+                program_info.push(format!("   {}", line));
+            }
         }
-        if !budget_chance_analysis.programs_rejected_from.is_empty() {
-            println!("   ❌ Unlikely admitted to: {}", budget_chance_analysis.programs_rejected_from.join(", "));
+        
+        // Handle last program if file doesn't end with empty line
+        if !current_program.is_empty() && !program_info.is_empty() {
+            println!("   📋 {}", current_program);
+            for info in &program_info {
+                println!("      {}", info);
+            }
         }
-    } else {
-        println!("   ❓ Target applicant not found in budget-funded program lists");
     }
     
-    println!("\n💡 Budget Recommendation: {}", budget_chance_analysis.final_recommendation);
-
-    // Commercial funding analysis if available
-    if let (Some(commercial_analysis), Some(commercial_chance_analysis)) = (commercial_analysis, commercial_chance_analysis) {
-        println!("\n💳 COMMERCIAL FUNDING ANALYSIS:");
-        println!("📈 Program Popularity (most to least competitive):");
-        for (i, popularity) in commercial_analysis.program_popularities.iter().enumerate() {
-            println!(
-                "   {}. {} - {:.1} applicants per place (avg score: {:.2})",
-                i + 1,
-                popularity.program_name,
-                popularity.applications_per_place,
-                popularity.top_third_average_score
-            );
-        }
-        
-        println!("\n🎯 Target Applicant Results (Commercial):");
-        if commercial_analysis.target_applicant_found {
-            if !commercial_chance_analysis.programs_admitted_to.is_empty() {
-                println!("   ✅ Likely admitted to: {}", commercial_chance_analysis.programs_admitted_to.join(", "));
-            }
-            if !commercial_chance_analysis.programs_rejected_from.is_empty() {
-                println!("   ❌ Unlikely admitted to: {}", commercial_chance_analysis.programs_rejected_from.join(", "));
-            }
-        } else {
-            println!("   ❓ Target applicant not found in commercial-funded program lists");
-        }
-        
-        println!("\n💡 Commercial Recommendation: {}", commercial_chance_analysis.final_recommendation);
-    }
+    println!("\n💡 {} Recommendation: {}", funding_type, chance_analysis.final_recommendation);
 }
 
 // 1. Generate all programs popularity chain

@@ -5,8 +5,21 @@ pub struct Config {
     pub target_snils: String,
     pub programs_of_interest: Option<Vec<String>>,
     pub target_funding_types: Vec<String>,
+    // Data source configuration
+    pub data_source_mode: DataSourceMode,
     pub data_directory: Option<String>,
+    pub internet_urls: Option<Vec<String>>,
     pub output_directory: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum DataSourceMode {
+    #[serde(rename = "local")]
+    Local,
+    #[serde(rename = "internet")]
+    Internet,
+    #[serde(rename = "both")]
+    Both,
 }
 
 impl Default for Config {
@@ -22,7 +35,12 @@ impl Default for Config {
                 // Note: Comment out commercial funding to only analyze budget funding
                 // "Коммерческое финансирование".to_string(),
             ],
+            data_source_mode: DataSourceMode::Local,
             data_directory: Some("data-source".to_string()),
+            internet_urls: Some(vec![
+                "https://example.com/admission-list1".to_string(),
+                "https://example.com/admission-list2".to_string(),
+            ]),
             output_directory: Some("output".to_string()),
         }
     }

@@ -1,12 +1,28 @@
 target_snils = "15124960041"
+
 # Comment out programs_of_interest to analyze ALL programs
 # programs_of_interest = [
 #     "ОП СПО Лечебное дело",
 #     "ОП СПО Фармация",
 # ]
+
 target_funding_types = [
     "Бюджетное финансирование",
     "Коммерческое финансирование",
 ]
+
+# Data source configuration
+# Options: "local", "internet", "both"
+data_source_mode = "internet"
+
+# Local data source (used when data_source_mode is "local" or "both")
 data_directory = "data-source"
+
+# Internet data sources (used when data_source_mode is "internet" or "both")
+# Replace with actual URLs of admission lists
+internet_urls = [
+    "https://abiturient.tyumsmu.ru/list/2025/1/28/183/s/o/b",
+    "https://abiturient.tyumsmu.ru/list/2025/1/28/183/s/o/d",
+]
+
 output_directory = "output"

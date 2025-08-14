@@ -4,20 +4,66 @@ use regex::Regex;
 use scraper::{Html, Selector};
 use std::fs;
 
-pub struct AdmissionScraper;
+pub struct AdmissionScraper {
+    client: reqwest::Client,
+}
 
 impl AdmissionScraper {
     pub fn new() -> Self {
-        Self
+        Self {
+            client: reqwest::Client::new(),
+        }
     }
 
     pub fn scrape_file(&self, file_path: &str) -> Result<Vec<(ProgramInfo, Vec<StudentRecord>)>> {
         let content = fs::read_to_string(file_path)
             .with_context(|| format!("Failed to read file: {}", file_path))?;
 
+        self.parse_html_content(&content, Some(file_path))
+    }
+
+    pub async fn scrape_url(&self, url: &str) -> Result<Vec<(ProgramInfo, Vec<StudentRecord>)>> {
+        println!("🌐 Fetching data from: {}", url);
+        
+        let response = self.client
+            .get(url)
+            .timeout(std::time::Duration::from_secs(30))
+            .send()
+            .await
+            .with_context(|| format!("Failed to fetch URL: {}", url))?;
+
+        if !response.status().is_success() {
+            return Err(anyhow::anyhow!("HTTP request failed with status: {}", response.status()));
+        }
+
+        let content = response.text().await
+            .with_context(|| format!("Failed to read response body from: {}", url))?;
+
+        // Look for the data-wrap div specifically
         let document = Html::parse_document(&content);
+        let data_wrap_selector = Selector::parse("div.data-wrap").unwrap();
+        
+        if let Some(data_wrap) = document.select(&data_wrap_selector).next() {
+            // Create a new document from just the data-wrap content
+            let data_wrap_html = data_wrap.html();
+            println!("   ✅ Found data-wrap section ({} chars)", data_wrap_html.len());
+            self.parse_html_content(&data_wrap_html, Some(url))
+        } else {
+            println!("   ⚠️  No data-wrap section found, parsing entire document");
+            self.parse_html_content(&content, Some(url))
+        }
+    }
+
+    fn parse_html_content(&self, content: &str, source: Option<&str>) -> Result<Vec<(ProgramInfo, Vec<StudentRecord>)>> {
+        let document = Html::parse_document(content);
         
         let programs = self.extract_all_programs(&document)?;
+        
+        if let Some(src) = source {
+            if programs.is_empty() {
+                println!("   ⚠️  Warning: No programs found in {}", src);
+            }
+        }
 
         Ok(programs)
     }
