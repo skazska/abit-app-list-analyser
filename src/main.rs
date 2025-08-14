@@ -924,22 +924,42 @@ fn generate_final_cutoff_analysis(
 
                 let target_score = record.get_numeric_score().unwrap_or(0.0);
                 
-                // Calculate how many applicants are between target and last available position
-                // take position of target applicant in eager applicants list for program
-                // and extract available places count of program
+                // Calculate how many eager applicants are between target and last available position
                 let applicants_behind = if !is_admitted {
-                    // Count applicants between target rank and available places
-                    let last_available_rank = record.available_places as usize;
-                    let target_rank = record.rank as usize;
+                    // Get all eager applicants for this program, sorted by rank
+                    let eager_applicants: Vec<&models::StudentRecord> = records
+                        .iter()
+                        .filter(|r| r.has_original_document() || r.has_consent())
+                        .collect();
                     
-                    if target_rank > last_available_rank {
-                        // Count applicants from position (last_available_rank + 1) to (target_rank - 1)
-                        records.iter()
-                            .filter(|r| {
-                                let rank = r.rank as usize;
-                                rank > last_available_rank && rank < target_rank
-                            })
-                            .count()
+                    // Find target position in eager applicants list
+                    let target_position_in_eager = eager_applicants
+                        .iter()
+                        .position(|r| normalize_snils(&r.snils) == normalized_target);
+
+                    // Find the last available position in the program
+                    let snils_of_last_available = analysis
+                        .final_admission_results
+                        .get(program_name)
+                        .and_then(|admitted_list| admitted_list.last())
+                        .map(|snils| normalize_snils(snils))
+                        .unwrap_or_default();
+
+                    // Find the last available position in the eager applicants list
+                    let last_available_position = eager_applicants
+                        .iter()
+                        .position(|r| normalize_snils(&r.snils) == snils_of_last_available).unwrap_or_default();
+
+                    if let Some(target_pos) = target_position_in_eager {
+                        let available_places = record.available_places as usize;
+                        let target_pos_1_based = target_pos + 1; // Convert to 1-based position
+                        
+                        if target_pos_1_based > available_places {
+                            // Count eager applicants between available_places and target position
+                            target_pos_1_based - last_available_position - 1
+                        } else {
+                            0
+                        }
                     } else {
                         0
                     }
