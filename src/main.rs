@@ -357,83 +357,6 @@ fn generate_detailed_csv(
     Ok(())
 }
 
-fn print_unified_summary(
-    analysis: &analyzer::AdmissionAnalysis,
-    output_dir: &str,
-) {
-    println!("\n📊 UNIFIED PRIORITY-BASED ADMISSION ANALYSIS");
-    println!("==========================================\n");
-    
-    println!("🏆 Program Popularity Ranking (by average priority):");
-    for (i, popularity) in analysis.program_popularities.iter().enumerate().take(10) {
-        let eager_per_place = popularity.eager_applicants.len() as f64 / popularity.available_places as f64;
-        println!(
-            "   {}. {} ({}) - {:.1} eager applicants per place (avg score: {:.2}, avg priority: {:.2})",
-            i + 1,
-            popularity.program_name,
-            popularity.funding_source,
-            eager_per_place,
-            popularity.average_score,
-            popularity.top_candidates_average_priority
-        );
-    }
-    
-    println!("\n🎯 Target Applicant Results:");
-    if analysis.target_applicant_found {
-        println!("✅ Target applicant found in the data");
-        println!("📋 Application Results:");
-        
-        // Read cutoff analysis to get detailed status information
-        let cutoff_path = format!("{}/final_cutoff_analysis.txt", output_dir);
-        if let Ok(cutoff_content) = fs::read_to_string(&cutoff_path) {
-            let lines: Vec<&str> = cutoff_content.lines().collect();
-            let mut current_program = String::new();
-            let mut current_status ;
-            
-            for line in lines.iter().skip(3) { // Skip header lines
-                if line.starts_with("Program: ") {
-                    current_program = line.strip_prefix("Program: ").unwrap_or(line).to_string();
-                } else if line.starts_with("Status: ") {
-                    current_status = line.strip_prefix("Status: ").unwrap_or(line).to_string();
-                    
-                    // Format status with appropriate icons
-                    let formatted_status = if current_status.contains("Admitted") && !current_status.contains("Not_") {
-                        if current_status.contains("Admitted_ByScore_NotByPriority") {
-                            format!("🟡 {}", current_status)
-                        } else {
-                            format!("✅ {}", current_status)
-                        }
-                    } else if current_status.contains("Not_Admitted") {
-                        format!("❌ {}", current_status)
-                    } else if current_status.contains("Hypothetical") {
-                        if current_status.contains("Would likely be admitted") {
-                            format!("🔮 {}", current_status)
-                        } else {
-                            format!("🚫 {}", current_status)
-                        }
-                    } else {
-                        format!("ℹ️  {}", current_status)
-                    };
-                    
-                    println!("   • {}: {}", current_program, formatted_status);
-                }
-            }
-        } else {
-            // Fallback to simple format if cutoff analysis file not found
-            for (program_key, admitted) in &analysis.target_applicant_results {
-                let status = if *admitted { "✅ Admitted" } else { "❌ Not_Admitted" };
-                println!("   • {}: {}", program_key, status);
-            }
-        }
-    } else {
-        println!("❌ Target applicant not found in the data");
-        println!("   This could mean:");
-        println!("   • The SNILS is incorrect");
-        println!("   • The applicant didn't apply to any programs");
-        println!("   • The data source doesn't contain this applicant");
-    }
-}
-
 // 2. Generate individual CSV files for each program
 fn generate_individual_program_csvs(
     all_program_records: &[(String, Vec<models::StudentRecord>)],
@@ -883,25 +806,7 @@ fn generate_final_cutoff_analysis(
                     let detail = format!(" (would qualify by score but priority {} not selected)", target_rec.priority);
                     ("Admitted_ByScore_NotByPriority".to_string(), detail, String::new())
                 } else {
-                    // Target doesn't have good enough score
-                    let target_rank_position = all_matching_records
-                        .iter()
-                        .position(|r| normalize_snils(&r.snils) == normalized_target)
-                        .map(|pos| pos + 1)
-                        .unwrap_or(0);
-                    
-                    let applicants_behind = if target_rank_position > available_places {
-                        target_rank_position - available_places
-                    } else {
-                        0
-                    };
-                    
-                    let detail = if applicants_behind > 0 {
-                        format!(" ({} applicants behind)", applicants_behind)
-                    } else {
-                        String::new()
-                    };
-                    
+                    let detail = String::new(); 
                     ("Not_Admitted".to_string(), detail, String::new())
                 }
             };

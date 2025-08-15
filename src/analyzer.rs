@@ -17,8 +17,6 @@ pub struct ProgramPopularity {
 pub struct AdmissionAnalysis {
     pub program_popularities: Vec<ProgramPopularity>,
     pub final_admission_results: HashMap<String, Vec<String>>, // program_key -> admitted SNILSes
-    pub target_applicant_found: bool,
-    pub target_applicant_results: Vec<(String, bool)>, // (program_key, admitted)
 }
     
 pub struct AdmissionAnalyzer<'a> {
@@ -51,14 +49,9 @@ impl<'a> AdmissionAnalyzer<'a> {
         // Step 4: Simulate admission process using the new priority-based algorithm
         let final_admission_results = self.simulate_priority_based_admission(&program_popularities, &sorted_eager_applicants);
         
-        // Step 5: Check if target applicant was found and their results
-        let (target_found, target_results) = self.check_target_applicant_results(&final_admission_results, &all_program_records);
-
         AdmissionAnalysis {
             program_popularities,
             final_admission_results,
-            target_applicant_found: target_found,
-            target_applicant_results: target_results,
         }
     }
 
@@ -246,7 +239,7 @@ impl<'a> AdmissionAnalyzer<'a> {
 
                         let mut snils_str = String::new();
                         for admitted_snils in admission_list.clone() {
-                            if (!snils_str.is_empty()) {
+                            if !snils_str.is_empty() {
                                 snils_str.push_str(", ");
                             }
                             if normalize_snils(&admitted_snils) == normalized_snils {
@@ -275,36 +268,6 @@ impl<'a> AdmissionAnalyzer<'a> {
         }
         
         admission_lists
-    }
-
-    /// Check if target applicant was found and their results
-    fn check_target_applicant_results(
-        &self,
-        final_admission_results: &HashMap<String, Vec<String>>,
-        all_program_records: &[(String, Vec<StudentRecord>)],
-    ) -> (bool, Vec<(String, bool)>) {
-        let normalized_target = normalize_snils(self.target_snils);
-        let mut target_found = false;
-        let mut target_results = Vec::new();
-        
-        // Check all programs the target applied to
-        for (program_name, records) in all_program_records {
-            for record in records {
-                if normalize_snils(&record.snils) == normalized_target {
-                    target_found = true;
-                    let program_key = format!("{}_{}", program_name, record.funding_source);
-                    
-                    let admitted = final_admission_results
-                        .get(&program_key)
-                        .map(|list| list.iter().any(|snils| normalize_snils(snils) == normalized_target))
-                        .unwrap_or(false);
-                    
-                    target_results.push((program_key, admitted));
-                }
-            }
-        }
-        
-        (target_found, target_results)
     }
 
     /// Public method to group records by program and funding type (for reporting)
