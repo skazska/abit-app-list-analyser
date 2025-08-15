@@ -3,8 +3,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub target_snils: String,
-    pub programs_of_interest: Option<Vec<String>>,
-    pub target_funding_types: Vec<String>,
     // Data source configuration
     pub data_source_mode: DataSourceMode,
     pub data_directory: Option<String>,
@@ -26,16 +24,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             target_snils: "".to_string(),
-            programs_of_interest: Some(vec![
-                "ОП СПО Лечебное дело".to_string(),
-                "ОП СПО Фармация".to_string(),
-            ]),
-            target_funding_types: vec![
-                "Бюджетное финансирование".to_string(),
-                // Note: Comment out commercial funding to only analyze budget funding
-                // "Коммерческое финансирование".to_string(),
-            ],
-            data_source_mode: DataSourceMode::Local,
+            data_source_mode: DataSourceMode::Internet,
             data_directory: Some("data-source".to_string()),
             internet_urls: Some(vec![
                 "https://example.com/admission-list1".to_string(),

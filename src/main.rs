@@ -110,12 +110,6 @@ async fn main() -> Result<()> {
 
     println!("🔍 Analyzing admission data for SNILS: {}", config.target_snils);
     println!(" Output directory: {} (cleaned)", output_dir);
-    if let Some(programs) = &config.programs_of_interest {
-        println!("🎯 Programs of interest: {}", programs.join(", "));
-    } else {
-        println!("🎯 Programs of interest: ALL PROGRAMS");
-    }
-    println!("💰 Target funding types: {}", config.target_funding_types.join(", "));
     println!("🌐 Data source mode: {:?}", config.data_source_mode);
 
     // Initialize components
