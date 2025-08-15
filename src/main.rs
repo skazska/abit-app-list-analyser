@@ -2,7 +2,7 @@ mod models;
 mod scraper;
 mod analyzer;
 
-use analyzer::{AdmissionAnalyzer, ChanceAnalysis};
+use analyzer::{AdmissionAnalyzer};
 use models::Config;
 use anyhow::Result;
 use clap::{Arg, Command};
@@ -41,6 +41,28 @@ fn deduplicate_records_by_snils(records: Vec<models::StudentRecord>) -> Vec<mode
     result
 }
 
+/// finds max score in list of records
+/// starting from first record set score to max if it less than max. do until meet last record with actualy max score
+fn set_max_score_on_privileged_records(records: &mut Vec<models::StudentRecord>) {
+    let max_score = records.iter()
+        .filter_map(|r| r.get_numeric_score())
+        .fold(0.0, |max, score| if max < score { score } else { max });
+
+    let mut last_max_score_position = records.iter().rposition(|r| r.get_numeric_score() == Some(max_score)).unwrap_or(0);
+
+    for record in records {
+        if last_max_score_position == 0 { break; }
+
+        if let Some(score) = record.get_numeric_score() {
+            if score < max_score {
+                record.set_numeric_score(max_score);
+            } 
+        }
+
+        last_max_score_position -= 1;
+    }
+}
+
 /// Determine if record1 is better than record2 for the same SNILS
 /// Priority: Original document (Да) > Consent (Да) > Priority number (lower is better)
 fn is_record_better(record1: &models::StudentRecord, record2: &models::StudentRecord) -> bool {
@@ -68,7 +90,7 @@ fn is_record_better(record1: &models::StudentRecord, record2: &models::StudentRe
 async fn main() -> Result<()> {
     let matches = Command::new("abitur-analyzer")
         .version("1.0")
-        .about("Analyzes admission chances for medical programs")
+        .about("Simultes admission process")
         .arg(
             Arg::new("config")
                 .short('c')
@@ -76,6 +98,21 @@ async fn main() -> Result<()> {
                 .value_name("FILE")
                 .help("Configuration file path")
                 .default_value("config.toml"),
+        )
+        .arg(
+            Arg::new("snils")
+                .short('s')
+                .long("snils")
+                .value_name("SNILS")
+                .help("target applicant id")
+        )
+        .arg(
+            Arg::new("data_source_mode")
+                .short('d')
+                .long("data_source_mode")
+                .value_name("DATA_SOURCE_MODE")
+                .help("data source mode 'local'/'internet")
+                .default_value("")
         )
         .get_matches();
 
@@ -93,12 +130,31 @@ async fn main() -> Result<()> {
         return Ok(());
     };
 
+    let target_snils = matches.get_one::<String>("snils").cloned().unwrap_or_else(|| config.target_snils.clone());
+
     // Validate configuration
-    if config.target_snils.is_empty() {
-        println!("❌ Error: target_snils is empty in configuration file");
-        println!("   Please edit {} and set the target SNILS", config_file);
+    if target_snils.is_empty() {
+        println!("❌ Error: target_snils is empty in configuration file and no argument provided");
+        println!("   Please edit {} and set the target SNILS or pass it as a command-line argument", config_file);
         return Ok(());
     }
+
+    println!("Data source mode from config: {:?}", config.data_source_mode);
+
+    let data_source_mode_arg = matches.get_one::<String>("data_source_mode");
+    println!("📂 Using data source mode from arguments: {:?}", data_source_mode_arg);
+    let data_source_mode = match data_source_mode_arg {
+        Some(str) => {
+            if str == "local" {
+                models::DataSourceMode::Local
+            } else if str == "internet" {
+                models::DataSourceMode::Internet
+            } else {
+                config.data_source_mode.clone()
+            }
+        },
+        _ => config.data_source_mode.clone(),
+    };
 
     let output_dir = config.output_directory.as_deref().unwrap_or("output");
 
@@ -108,9 +164,9 @@ async fn main() -> Result<()> {
     // Clean up previous results
     clean_output_directory(output_dir)?;
 
-    println!("🔍 Analyzing admission data for SNILS: {}", config.target_snils);
+    println!("🔍 Analyzing admission data for SNILS: {}", target_snils);
     println!(" Output directory: {} (cleaned)", output_dir);
-    println!("🌐 Data source mode: {:?}", config.data_source_mode);
+    println!("🌐 Data source mode: {:?}", data_source_mode);
 
     // Initialize components
     let scraper = scraper::AdmissionScraper::new();
@@ -119,7 +175,7 @@ async fn main() -> Result<()> {
     let mut all_program_records = Vec::new();
     
     // Process local files if configured
-    if matches!(config.data_source_mode, models::DataSourceMode::Local | models::DataSourceMode::Both) {
+    if matches!(data_source_mode, models::DataSourceMode::Local | models::DataSourceMode::Both) {
         if let Some(data_dir) = &config.data_directory {
             println!("📂 Processing local files from: {}", data_dir);
             
@@ -139,12 +195,12 @@ async fn main() -> Result<()> {
                                            original_count, program_info.name);
                                     
                                     // Deduplicate records by SNILS within this program
-                                    let deduplicated_records = deduplicate_records_by_snils(records);
+                                    let mut deduplicated_records = deduplicate_records_by_snils(records);
                                     let duplicates_removed = original_count - deduplicated_records.len();
                                     if duplicates_removed > 0 {
                                         println!("   🔄 Removed {} duplicate SNILS records", duplicates_removed);
                                     }
-                                    
+                                    set_max_score_on_privileged_records(&mut deduplicated_records);
                                     all_program_records.push((program_info.name, deduplicated_records));
                                 }
                             }
@@ -161,7 +217,7 @@ async fn main() -> Result<()> {
     }
     
     // Process internet URLs if configured
-    if matches!(config.data_source_mode, models::DataSourceMode::Internet | models::DataSourceMode::Both) {
+    if matches!(data_source_mode, models::DataSourceMode::Internet | models::DataSourceMode::Both) {
         if let Some(urls) = &config.internet_urls {
             println!("🌐 Processing internet sources ({} URLs)", urls.len());
             
@@ -174,11 +230,12 @@ async fn main() -> Result<()> {
                                    original_count, program_info.name);
                             
                             // Deduplicate records by SNILS within this program
-                            let deduplicated_records = deduplicate_records_by_snils(records);
+                            let mut deduplicated_records = deduplicate_records_by_snils(records);
                             let duplicates_removed = original_count - deduplicated_records.len();
                             if duplicates_removed > 0 {
                                 println!("   🔄 Removed {} duplicate SNILS records", duplicates_removed);
                             }
+                            set_max_score_on_privileged_records(&mut deduplicated_records);
                             
                             all_program_records.push((program_info.name, deduplicated_records));
                         }
@@ -200,52 +257,22 @@ async fn main() -> Result<()> {
 
     // Perform unified priority-based analysis for all funding types
     println!("\n🎯 Analyzing admission chances using priority-based algorithm...");
-    let analyzer = AdmissionAnalyzer::new(
-        config.target_snils.clone(), 
-        config.clone()
-    );
-    
-    let analysis = analyzer.analyze_all_programs(all_program_records.clone());
-    let chance_analysis = analyzer.analyze_target_chances(&analysis);
+    let analyzer = AdmissionAnalyzer::new(&target_snils);
+
+    let analysis = analyzer.analyze_all_programs(&all_program_records);
 
     // Generate reports with new unified data
     generate_program_popularity_report(&analysis, output_dir)?;
     generate_detailed_csv(&all_program_records, output_dir)?;
     generate_individual_program_csvs(&all_program_records, output_dir)?;
-    generate_filtered_eager_csvs(&analysis, &all_program_records, output_dir)?;
-    generate_available_places_csvs(&analysis, &all_program_records, output_dir)?;
-    generate_final_cutoff_analysis(&analysis, &chance_analysis, &all_program_records, output_dir)?;
+    generate_filtered_eager_csvs(&target_snils, &analysis, &all_program_records, output_dir)?;
+    generate_available_places_csvs(&target_snils, &analysis, &all_program_records, output_dir)?;
+    generate_final_cutoff_analysis(&target_snils, &analysis,  &all_program_records, output_dir)?;
 
     println!("✅ Priority-based analysis complete!");
-
-    // Print summary
-    print_unified_summary(&analysis, &chance_analysis, output_dir);
-
-    println!("\n✅ Analysis complete!");
     println!("📂 Results: {}", output_dir);
     println!("Check the output directory for detailed reports.");
     Ok(())
-}
-
-fn filter_records_by_funding(
-    all_program_records: &[(String, Vec<models::StudentRecord>)],
-    funding_types: &[String],
-) -> Vec<(String, Vec<models::StudentRecord>)> {
-    let mut filtered_records = Vec::new();
-    
-    for (program_name, records) in all_program_records {
-        let filtered_program_records: Vec<models::StudentRecord> = records
-            .iter()
-            .filter(|record| funding_types.contains(&record.funding_source))
-            .cloned()
-            .collect();
-        
-        if !filtered_program_records.is_empty() {
-            filtered_records.push((program_name.clone(), filtered_program_records));
-        }
-    }
-    
-    filtered_records
 }
 
 fn generate_program_popularity_report(
@@ -330,28 +357,8 @@ fn generate_detailed_csv(
     Ok(())
 }
 
-fn print_summary(
-    budget_analysis: &analyzer::AdmissionAnalysis,
-    budget_chance_analysis: &ChanceAnalysis,
-    commercial_analysis: Option<&analyzer::AdmissionAnalysis>,
-    commercial_chance_analysis: Option<&ChanceAnalysis>,
-) {
-    println!("\n📊 COMPREHENSIVE ADMISSION ANALYSIS");
-    println!("===================================\n");
-    
-    // Print Budget Analysis
-    print_funding_analysis("BUDGET", budget_analysis, budget_chance_analysis, "budget");
-    
-    // Print Commercial Analysis if available
-    if let (Some(commercial_analysis), Some(commercial_chance_analysis)) = (commercial_analysis, commercial_chance_analysis) {
-        println!("\n");
-        print_funding_analysis("COMMERCIAL", commercial_analysis, commercial_chance_analysis, "commercial");
-    }
-}
-
 fn print_unified_summary(
     analysis: &analyzer::AdmissionAnalysis,
-    chance_analysis: &ChanceAnalysis,
     output_dir: &str,
 ) {
     println!("\n📊 UNIFIED PRIORITY-BASED ADMISSION ANALYSIS");
@@ -381,7 +388,7 @@ fn print_unified_summary(
         if let Ok(cutoff_content) = fs::read_to_string(&cutoff_path) {
             let lines: Vec<&str> = cutoff_content.lines().collect();
             let mut current_program = String::new();
-            let mut current_status = String::new();
+            let mut current_status ;
             
             for line in lines.iter().skip(3) { // Skip header lines
                 if line.starts_with("Program: ") {
@@ -418,9 +425,6 @@ fn print_unified_summary(
                 println!("   • {}: {}", program_key, status);
             }
         }
-        
-        println!("\n📝 Final Recommendation:");
-        println!("   {}", chance_analysis.final_recommendation);
     } else {
         println!("❌ Target applicant not found in the data");
         println!("   This could mean:");
@@ -428,264 +432,6 @@ fn print_unified_summary(
         println!("   • The applicant didn't apply to any programs");
         println!("   • The data source doesn't contain this applicant");
     }
-}
-
-fn print_funding_analysis(
-    funding_type: &str,
-    analysis: &analyzer::AdmissionAnalysis,
-    chance_analysis: &ChanceAnalysis,
-    output_subdir: &str,
-) {
-    let icon = if funding_type == "BUDGET" { "💰" } else { "💳" };
-    
-    println!("{} {} FUNDING ANALYSIS:", icon, funding_type);
-    println!("{}📈 Program Popularity (most to least competitive):", "");
-    for (i, popularity) in analysis.program_popularities.iter().enumerate() {
-        let eager_per_place = popularity.eager_applicants.len() as f64 / popularity.available_places as f64;
-        println!(
-            "   {}. {} ({}) - {:.1} eager applicants per place (avg score: {:.2}, avg priority: {:.2})",
-            i + 1,
-            popularity.program_name,
-            popularity.funding_source,
-            eager_per_place,
-            popularity.average_score,
-            popularity.top_candidates_average_priority
-        );
-    }
-    
-    println!("\n🎯 Detailed Cutoff Analysis:");
-    
-    // Read and display cutoff analysis
-    let cutoff_path = format!("output/{}/final_cutoff_analysis.txt", output_subdir);
-    if let Ok(cutoff_content) = fs::read_to_string(&cutoff_path) {
-        let lines: Vec<&str> = cutoff_content.lines().collect();
-        let mut current_program = String::new();
-        let mut program_info = Vec::new();
-        
-        for line in lines.iter().skip(3) { // Skip header lines
-            if line.is_empty() {
-                if !current_program.is_empty() && !program_info.is_empty() {
-                    println!("   📋 {}", current_program);
-                    for info in &program_info {
-                        println!("      {}", info);
-                    }
-                    println!();
-                }
-                current_program.clear();
-                program_info.clear();
-            } else if line.starts_with("Program: ") {
-                current_program = line.strip_prefix("Program: ").unwrap_or(line).to_string();
-            } else if line.starts_with("Status: ") {
-                let status = line.strip_prefix("Status: ").unwrap_or(line);
-                if status.contains("Admitted") {
-                    program_info.push(format!("✅ {}", status));
-                } else if status.contains("Not_Admitted") {
-                    program_info.push(format!("❌ {}", status));
-                } else if status.contains("Hypothetical") {
-                    if status.contains("Would likely be admitted") {
-                        program_info.push(format!("🔮 {}", status));
-                    } else {
-                        program_info.push(format!("🚫 {}", status));
-                    }
-                }
-            } else if line.starts_with("Target score: ") || line.starts_with("Cutoff score: ") || line.starts_with("Available places: ") || line.starts_with("Position in admitted list: ") {
-                program_info.push(format!("   {}", line));
-            }
-        }
-        
-        // Handle last program if file doesn't end with empty line
-        if !current_program.is_empty() && !program_info.is_empty() {
-            println!("   📋 {}", current_program);
-            for info in &program_info {
-                println!("      {}", info);
-            }
-        }
-    }
-    
-    println!("\n💡 {} Recommendation: {}", funding_type, chance_analysis.final_recommendation);
-}
-
-// 1. Generate all programs popularity chain
-fn generate_all_programs_popularity(
-    all_program_records: &[(String, Vec<models::StudentRecord>)],
-    output_dir: &str,
-) -> Result<()> {
-    use crate::models::StudentRecord;
-    use std::collections::HashMap;
-
-    let mut content = String::new();
-    content.push_str("All Programs Popularity Chain\n");
-    content.push_str("============================\n\n");
-    content.push_str("Programs ordered from most to least popular (by funding type):\n\n");
-
-    // Build: program_name -> funding_source -> Vec<StudentRecord>
-    let mut by_program: HashMap<String, HashMap<String, Vec<StudentRecord>>> = HashMap::new();
-    for (program_name, records) in all_program_records.iter() {
-        for rec in records {
-            by_program
-                .entry(program_name.clone())
-                .or_insert_with(HashMap::new)
-                .entry(rec.funding_source.clone())
-                .or_insert_with(Vec::new)
-                .push(rec.clone());
-        }
-    }
-
-    #[derive(Clone)]
-    struct Entry {
-        funding_source: String,
-        applications_per_place: f64,
-        top_subset_average_score: f64,
-        available_places: u32,
-        total_applications: usize,
-        total_eager_applicants: usize,
-    }
-
-    #[derive(Clone)]
-    struct ProgramGroup {
-        program_name: String,
-        // key for ordering programs: prefer budget metrics if present, else commercial, else first
-        key_applications_per_place: f64,
-        key_top_avg: f64,
-        key_total_apps: usize,
-        entries: Vec<Entry>,
-    }
-
-    let mut groups: Vec<ProgramGroup> = Vec::new();
-
-    for (program_name, funding_map) in by_program.into_iter() {
-        let mut entries: Vec<Entry> = Vec::new();
-        // compute entry per funding
-        for (funding, mut records) in funding_map.into_iter() {
-            if records.is_empty() { continue; }
-            records.sort_by_key(|r| r.rank);
-            let available_places = records[0].available_places;
-            let total_applications = records.len();
-            let eager: Vec<StudentRecord> = records
-                .into_iter()
-                .filter(|r| r.has_original_document() || r.has_consent())
-                .collect();
-            let total_eager = eager.len();
-            let applications_per_place = if available_places > 0 {
-                total_eager as f64 / available_places as f64
-            } else { 0.0 };
-            // Top subset is available_places * 2 eager applicants
-            let top_count = std::cmp::min(available_places as usize * 2, total_eager);
-            let scores: Vec<f64> = eager
-                .iter()
-                .take(top_count)
-                .filter_map(|r| r.get_numeric_score())
-                .collect();
-            let top_subset_average_score = if scores.is_empty() { 0.0 } else { scores.iter().sum::<f64>() / scores.len() as f64 };
-
-            entries.push(Entry {
-                funding_source: funding,
-                applications_per_place,
-                top_subset_average_score,
-                available_places,
-                total_applications,
-                total_eager_applicants: total_eager,
-            });
-        }
-
-        if entries.is_empty() { continue; }
-
-        // determine key metrics: budget first, else commercial, else first
-        let ke = if let Some(b) = entries.iter().find(|e| e.funding_source == "Бюджетное финансирование") {
-            b.clone()
-        } else if let Some(c) = entries.iter().find(|e| e.funding_source == "Коммерческое финансирование") {
-            c.clone()
-        } else {
-            entries[0].clone()
-        };
-
-        groups.push(ProgramGroup {
-            program_name,
-            key_applications_per_place: ke.applications_per_place,
-            key_top_avg: ke.top_subset_average_score,
-            key_total_apps: ke.total_applications,
-            entries,
-        });
-    }
-
-    // Sort programs by key metrics
-    groups.sort_by(|a, b| {
-        b.key_applications_per_place
-            .partial_cmp(&a.key_applications_per_place)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| b.key_top_avg.partial_cmp(&a.key_top_avg).unwrap_or(std::cmp::Ordering::Equal))
-            .then_with(|| b.key_total_apps.cmp(&a.key_total_apps))
-    });
-
-    // Emit entries: for each program, budget first (if any), then others by competitiveness
-    let mut counter = 1usize;
-    for group in groups.iter() {
-        // Split budget vs others
-        let mut budget: Vec<&Entry> = group.entries.iter().filter(|e| e.funding_source == "Бюджетное финансирование").collect();
-        let mut others: Vec<&Entry> = group.entries.iter().filter(|e| e.funding_source != "Бюджетное финансирование").collect();
-        // Sort others by competitiveness
-        others.sort_by(|a, b| {
-            b.applications_per_place
-                .partial_cmp(&a.applications_per_place)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| b.top_subset_average_score.partial_cmp(&a.top_subset_average_score).unwrap_or(std::cmp::Ordering::Equal))
-                .then_with(|| b.total_applications.cmp(&a.total_applications))
-        });
-
-        // Print helper
-        let mut print_entry = |e: &Entry| {
-            let eager_per_place = if e.available_places > 0 {
-                e.total_eager_applicants as f64 / e.available_places as f64
-            } else { 0.0 };
-            let total_per_place = if e.available_places > 0 {
-                e.total_applications as f64 / e.available_places as f64
-            } else { 0.0 };
-            
-            content.push_str(&format!(
-                "{}. Program: {} ({})\n",
-                counter,
-                group.program_name,
-                e.funding_source,
-            ));
-            content.push_str(&format!(
-                "Applications per place: {:.2}\n",
-                e.applications_per_place,
-            ));
-            content.push_str(&format!(
-                "Eager applicants per place: {:.2}\n",
-                eager_per_place,
-            ));
-            content.push_str(&format!(
-                "Total applications per place: {:.2}\n",
-                total_per_place,
-            ));
-            content.push_str(&format!(
-                "Top candidates average score: {:.2}\n",
-                e.top_subset_average_score,
-            ));
-            content.push_str(&format!(
-                "Available places: {}\n",
-                e.available_places,
-            ));
-            content.push_str(&format!(
-                "Total applications: {}\n",
-                e.total_applications,
-            ));
-            content.push_str(&format!(
-                "Total eager applicants: {}\n\n",
-                e.total_eager_applicants,
-            ));
-            counter += 1;
-        };
-
-        // Budget first
-        if let Some(b) = budget.pop() { print_entry(b); }
-        // Then others (e.g., commercial)
-        for e in others { print_entry(e); }
-    }
-
-    fs::write(Path::new(output_dir).join("all_programs_popularity.txt"), content)?;
-    Ok(())
 }
 
 // 2. Generate individual CSV files for each program
@@ -734,6 +480,7 @@ fn generate_individual_program_csvs(
 
 // 3. Generate filtered eager applicants with exclusion marks
 fn generate_filtered_eager_csvs(
+    target_snils: &str,
     analysis: &analyzer::AdmissionAnalysis,
     all_program_records: &[(String, Vec<models::StudentRecord>)],
     output_dir: &str,
@@ -745,7 +492,7 @@ fn generate_filtered_eager_csvs(
     fs::create_dir_all(&filtered_dir)?;
 
     // Create exclusion tracker based on admission simulation
-    let analyzer_instance = analyzer::AdmissionAnalyzer::new("dummy".to_string(), Config::default());
+    let analyzer_instance = analyzer::AdmissionAnalyzer::new(target_snils);
     let program_funding_groups = analyzer_instance.group_by_program_and_funding_public(all_program_records.to_vec());
     let mut excluded_normalized_snils = std::collections::HashSet::new();
 
@@ -849,6 +596,7 @@ fn generate_filtered_eager_csvs(
 
 // 4. Generate available places CSV files (only admitted students)
 fn generate_available_places_csvs(
+    target_snils: &str,
     analysis: &analyzer::AdmissionAnalysis,
     all_program_records: &[(String, Vec<models::StudentRecord>)],
     output_dir: &str,
@@ -860,9 +608,7 @@ fn generate_available_places_csvs(
     fs::create_dir_all(&admitted_dir)?;
 
     // Get target SNILS from the analysis
-    let config = models::Config::load_from_file("config.toml").unwrap_or_default();
-    let target_snils = config.target_snils;
-    let normalized_target = normalize_snils(&target_snils);
+    let normalized_target = normalize_snils(target_snils);
 
     // Process each program-funding combination
     for (program_key, admitted_snils_list) in &analysis.final_admission_results {
@@ -897,18 +643,12 @@ fn generate_available_places_csvs(
 
         // Find matching records in all_program_records
         let mut matching_records = Vec::new();
-        let mut target_record: Option<models::StudentRecord> = None;
         
         for (record_program_name, program_records) in all_program_records {
             if record_program_name == &program_name {
                 for record in program_records {
                     if record.funding_source == funding_source {
                         matching_records.push(record.clone());
-                        
-                        // Check if this is the target applicant
-                        if normalize_snils(&record.snils) == normalized_target {
-                            target_record = Some(record.clone());
-                        }
                     }
                 }
             }
@@ -1026,10 +766,10 @@ fn generate_available_places_csvs(
     Ok(())
 }
 
-// 5. Generate final cutoff analysis for programs of interest with target applicant position
+// 5. Generate final cutoff analysis for programs by popularity of interest with target applicant position
 fn generate_final_cutoff_analysis(
+    target_snils: &str,
     analysis: &analyzer::AdmissionAnalysis,
-    chance_analysis: &analyzer::ChanceAnalysis,
     all_program_records: &[(String, Vec<models::StudentRecord>)],
     output_dir: &str,
 ) -> Result<()> {
@@ -1040,7 +780,7 @@ fn generate_final_cutoff_analysis(
     let final_csv_path = Path::new(output_dir).join("final_cutoff_analysis.csv");
     
     let mut content = String::new();
-    content.push_str(&format!("Final Cutoff Analysis for SNILS: {}\n", chance_analysis.target_snils));
+    content.push_str(&format!("Final Cutoff Analysis for SNILS: {}\n", target_snils));
     content.push_str("==========================================\n\n");
 
     let mut csv_writer = Writer::from_path(final_csv_path)?;
@@ -1049,10 +789,16 @@ fn generate_final_cutoff_analysis(
         "Target_Score", "Cutoff_Score", "Admission_Position", "Admission_Status"
     ])?;
 
-    let normalized_target = normalize_snils(&chance_analysis.target_snils);
+    let normalized_target = normalize_snils(target_snils);
 
-    // Process each program-funding combination from admission results
-    for (program_key, admitted_snils_list) in &analysis.final_admission_results {
+    println!("📊 UNIFIED PRIORITY-BASED ADMISSION ANALYSIS for target SNILS: {}", target_snils);
+    println!("==========================================");
+
+    // Process each program-funding combination from admission results in order of popularity
+    for program_popularity in &analysis.program_popularities {
+        let program_key = &program_popularity.program_key;
+        let admitted_snils_list = &analysis.final_admission_results[program_key];
+
         // Parse program_key to get program_name and funding_source
         let (program_name, funding_source) = if program_key.ends_with("_Бюджетное финансирование") {
             let name_part = program_key.strip_suffix("_Бюджетное финансирование").unwrap();
@@ -1134,13 +880,6 @@ fn generate_final_cutoff_analysis(
             } else {
                 // FIXED: Check if target score is higher than cutoff - should be "Admitted" status
                 if target_score > cutoff_score && cutoff_score > 0.0 {
-                    // Target has good enough score but wasn't admitted due to priority logic
-                    let target_rank_position = all_matching_records
-                        .iter()
-                        .position(|r| normalize_snils(&r.snils) == normalized_target)
-                        .map(|pos| pos + 1)
-                        .unwrap_or(0);
-                    
                     let detail = format!(" (would qualify by score but priority {} not selected)", target_rec.priority);
                     ("Admitted_ByScore_NotByPriority".to_string(), detail, String::new())
                 } else {
@@ -1194,6 +933,29 @@ fn generate_final_cutoff_analysis(
             } else {
                 "Not in list".to_string()
             };
+            let eager_per_place = program_popularity.eager_applicants.len() as f64 / program_popularity.available_places as f64;
+
+            let status_ico = if is_admitted {
+                "✅"
+            } else {
+                "❌"
+            };
+            let target_priority = all_matching_records
+                .iter()
+                .find(|r| normalize_snils(&r.snils) == normalized_target)
+                .map(|r| r.priority)
+                .unwrap_or(0);
+            println!("{} Program: {}, funding: {}", status_ico, program_name, funding_source);
+            println!(
+                "Available Places: {}, Cutoff Score: {:.4}, Applicants per place: {:.1}, Avg priority: {:.2}",
+                available_places, cutoff_score, eager_per_place, program_popularity.top_candidates_average_priority
+            );
+            println!(
+                "Priority:{}, Target Score: {:.4}, Status: {}, Position in admitted: {}",
+                target_priority, target_score, admission_status, position_csv
+            );
+            println!("");
+
 
             csv_writer.write_record(&[
                 &program_name,

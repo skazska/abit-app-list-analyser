@@ -73,7 +73,7 @@ pub struct ApplicantApplication {
     pub funding_source: String,
     pub priority: u32,
     pub rank: u32,
-    pub average_score: f64,
+    pub score: f64,
     pub has_consent: bool,
     pub has_original_document: bool,
 }
@@ -83,6 +83,7 @@ pub struct EagerApplicant {
     pub snils: String,
     pub applications: Vec<ApplicantApplication>, // sorted by priority
     pub average_rank: f64, // average rank across all applications
+    pub score: f64, // average score across all applications
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -101,16 +102,16 @@ impl StudentRecord {
             .ok()
     }
 
+    pub fn set_numeric_score(&mut self, score: f64) {
+        self.average_score = format!("{:.4}", score);
+    }
+
     pub fn has_consent(&self) -> bool {
         self.consent.to_lowercase().contains("да")
     }
 
     pub fn has_original_document(&self) -> bool {
         self.document_type.to_lowercase().contains("да")
-    }
-
-    pub fn get_normalized_snils(&self) -> String {
-        normalize_snils(&self.snils)
     }
 }
 

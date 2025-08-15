@@ -1,4 +1,4 @@
-use crate::models::{StudentRecord, normalize_snils, Config, ApplicantApplication, EagerApplicant};
+use crate::models::{StudentRecord, normalize_snils, ApplicantApplication, EagerApplicant};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
@@ -20,40 +20,34 @@ pub struct AdmissionAnalysis {
     pub target_applicant_found: bool,
     pub target_applicant_results: Vec<(String, bool)>, // (program_key, admitted)
 }
-
-#[derive(Debug, Clone)]
-pub struct ChanceAnalysis {
-    pub target_snils: String,
-    pub programs_admitted_to: Vec<String>,
-    pub programs_rejected_from: Vec<String>,
-    pub final_recommendation: String,
+    
+pub struct AdmissionAnalyzer<'a> {
+    pub target_snils: &'a str,
 }
 
-pub struct AdmissionAnalyzer {
-    pub target_snils: String,
-    pub config: Config,
-}
-
-impl AdmissionAnalyzer {
-    pub fn new(target_snils: String, config: Config) -> Self {
-        Self { 
+impl<'a> AdmissionAnalyzer<'a> {
+    pub fn new(target_snils: &'a str) -> Self {
+        Self {
             target_snils, 
-            config,
         }
     }
 
     /// Main analysis function following the new priority-based logic
-    pub fn analyze_all_programs(&self, all_program_records: Vec<(String, Vec<StudentRecord>)>) -> AdmissionAnalysis {
+    pub fn analyze_all_programs(&self, all_program_records: &Vec<(String, Vec<StudentRecord>)>) -> AdmissionAnalysis {
         // Step 1: Create program-funding combinations and calculate popularity
-        let program_popularities = self.calculate_all_program_popularities(&all_program_records);
+        let program_popularities = self.calculate_all_program_popularities(all_program_records);
         
         // Step 2: Prepare eager applicants with their applications ordered by priority
-        let eager_applicants = self.prepare_eager_applicants(&all_program_records);
+        let eager_applicants = self.prepare_eager_applicants(all_program_records);
         
-        // Step 3: Sort eager applicants by average rank
+        // Step 3: Sort eager applicants by score descending then average rank ascending
         let mut sorted_eager_applicants = eager_applicants;
-        sorted_eager_applicants.sort_by(|a, b| a.average_rank.partial_cmp(&b.average_rank).unwrap_or(std::cmp::Ordering::Equal));
-        
+        sorted_eager_applicants.sort_by(|a, b| {
+            b.score.partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.average_rank.partial_cmp(&b.average_rank).unwrap_or(std::cmp::Ordering::Equal))
+        });
+
         // Step 4: Simulate admission process using the new priority-based algorithm
         let final_admission_results = self.simulate_priority_based_admission(&program_popularities, &sorted_eager_applicants);
         
@@ -155,7 +149,7 @@ impl AdmissionAnalyzer {
     /// Prepare eager applicants with their applications sorted by priority
     fn prepare_eager_applicants(&self, all_program_records: &[(String, Vec<StudentRecord>)]) -> Vec<EagerApplicant> {
         let mut applicant_map: HashMap<String, Vec<ApplicantApplication>> = HashMap::new();
-        
+
         // Collect all applications for each applicant
         for (program_name, records) in all_program_records {
             for record in records {
@@ -170,16 +164,17 @@ impl AdmissionAnalyzer {
                         program_name: program_name.clone(),
                         funding_source: record.funding_source.clone(),
                         priority: record.priority,
+                        score: record.get_numeric_score().unwrap_or(0.0),
                         rank: record.rank,
-                        average_score: record.get_numeric_score().unwrap_or(0.0),
                         has_consent: record.has_consent(),
                         has_original_document: record.has_original_document(),
                     };
                     
                     applicant_map
-                        .entry(normalized_snils)
+                        .entry(normalized_snils.clone())
                         .or_insert_with(Vec::new)
                         .push(application);
+
                 }
             }
         }
@@ -192,11 +187,14 @@ impl AdmissionAnalyzer {
             
             // Calculate average rank across all applications
             let average_rank = applications.iter().map(|app| app.rank as f64).sum::<f64>() / applications.len() as f64;
-            
+
+            let score = applications.iter().map(|app| app.score).sum::<f64>() / applications.len() as f64;
+
             eager_applicants.push(EagerApplicant {
                 snils,
                 applications,
                 average_rank,
+                score,
             });
         }
         
@@ -236,14 +234,41 @@ impl AdmissionAnalyzer {
                     .find(|p| p.program_key == *program_key)
                     .map(|p| p.available_places)
                     .unwrap_or(0);
-                
+
+                if normalized_snils == normalize_snils(self.target_snils) {
+                    println!("Processing applicant: {} for program: {}", normalized_snils, program_key);
+                }
+
                 // Check if admission list is not full
                 if let Some(admission_list) = admission_lists.get_mut(program_key) {
+                    if normalized_snils == normalize_snils(self.target_snils) {
+                        println!("Admission list length: {} available: {}", admission_list.len(), available_places);
+
+                        let mut snils_str = String::new();
+                        for admitted_snils in admission_list.clone() {
+                            if (!snils_str.is_empty()) {
+                                snils_str.push_str(", ");
+                            }
+                            if normalize_snils(&admitted_snils) == normalized_snils {
+                                snils_str.push_str(&format!("*{}*", admitted_snils));
+                            } else {
+                                snils_str.push_str(&format!("{}", admitted_snils));
+                            }
+                        }
+                        println!("{}", snils_str);
+                    }
                     if admission_list.len() < available_places as usize {
                         // Admit the applicant and mark as admitted
                         admission_list.push(application.snils.clone());
                         admitted_applicants.insert(normalized_snils.clone());
-                        break; // Move to next applicant
+
+
+                        if normalized_snils != normalize_snils(self.target_snils) {
+                            // Move to next applicant if not the target applicant
+                            break;
+                        } else {
+                            println!("Admitted target applicant: {}", normalized_snils);
+                        }
                     }
                 }
             }
@@ -258,7 +283,7 @@ impl AdmissionAnalyzer {
         final_admission_results: &HashMap<String, Vec<String>>,
         all_program_records: &[(String, Vec<StudentRecord>)],
     ) -> (bool, Vec<(String, bool)>) {
-        let normalized_target = normalize_snils(&self.target_snils);
+        let normalized_target = normalize_snils(self.target_snils);
         let mut target_found = false;
         let mut target_results = Vec::new();
         
@@ -307,35 +332,5 @@ impl AdmissionAnalyzer {
         }
         
         grouped
-    }
-
-    /// Analyze chances for the target applicant
-    pub fn analyze_target_chances(&self, analysis: &AdmissionAnalysis) -> ChanceAnalysis {
-        let normalized_target = normalize_snils(&self.target_snils);
-        let mut programs_admitted_to = Vec::new();
-        let mut programs_rejected_from = Vec::new();
-        
-        for (program_key, admitted) in &analysis.target_applicant_results {
-            if *admitted {
-                programs_admitted_to.push(program_key.clone());
-            } else {
-                programs_rejected_from.push(program_key.clone());
-            }
-        }
-        
-        let final_recommendation = if programs_admitted_to.is_empty() {
-            "Unfortunately, you were not admitted to any of your preferred programs.".to_string()
-        } else if programs_admitted_to.len() == 1 {
-            format!("Congratulations! You were admitted to: {}", programs_admitted_to[0])
-        } else {
-            format!("Congratulations! You were admitted to multiple programs: {}. You can choose the most preferred one.", programs_admitted_to.join(", "))
-        };
-        
-        ChanceAnalysis {
-            target_snils: self.target_snils.clone(),
-            programs_admitted_to,
-            programs_rejected_from,
-            final_recommendation,
-        }
     }
 }

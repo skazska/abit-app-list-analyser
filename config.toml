@@ -2,7 +2,7 @@ target_snils = "15124960041"
 
 # Data source configuration
 # Options: "local", "internet", "both"
-data_source_mode = "internet"
+data_source_mode = "local"
 
 # Local data source (used when data_source_mode is "local" or "both")
 data_directory = "data-source"
